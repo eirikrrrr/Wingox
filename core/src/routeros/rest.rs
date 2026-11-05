@@ -42,9 +42,19 @@ impl RestClient {
         })
     }
 
-    /// GET a REST path and return its parsed JSON.
-    async fn get(&self, path: &str) -> Result<serde_json::Value> {
-        let url = format!("{}/{}", self.base, path.trim_start_matches('/'));
+    /// GET a menu path (e.g. `ip/address`) and return its parsed JSON: an array
+    /// of rows for a list menu, an object for a settings menu. Only plain menu
+    /// paths are accepted (letters, digits, `-`, `/`), so a UI cannot smuggle a
+    /// query or another host into the URL.
+    pub async fn get(&self, path: &str) -> Result<serde_json::Value> {
+        let path = path.trim_matches('/');
+        if path.is_empty()
+            || !path.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '/')
+            || path.contains("//")
+        {
+            return Err(Error::Other(format!("not a RouterOS menu path: {path:?}")));
+        }
+        let url = format!("{}/{}", self.base, path);
         let resp = self
             .http
             .get(&url)

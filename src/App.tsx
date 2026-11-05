@@ -4,10 +4,11 @@ import { listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   Server, ShieldAlert, Network, Loader2, Terminal, Moon, Sun, SquareTerminal, Flame,
-  User, KeyRound, Plus, Play, Trash2, Save, Router, X, ExternalLink,
+  User, KeyRound, Plus, Play, Trash2, Save, Router, X, ExternalLink, PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import { AmbientNetwork } from "./AmbientNetwork";
-import { PaneTree, closePane, newLeaf, setPaneView, splitPane, type DeviceData, type Pane, type View } from "./Pane";
+import { newLeaf, type DeviceData, type Pane } from "./Pane";
+import { Workspace } from "./Workspace";
 
 export type ProxyKind = "socks5" | "http";
 
@@ -76,15 +77,20 @@ export const emptyProxy = (): Proxy => ({ kind: "socks5", host: "", port: 1080, 
 const blank = (): Profile => ({ id: "", name: "", host: "", port: 443, username: "admin", password: "", insecure: true, proxy: null });
 export const label = (p: Profile) => p.name.trim() || p.host || "device";
 
+const connArgs = (p: Profile) => ({
+  host: p.host, port: p.port, username: p.username, password: p.password, insecure: p.insecure,
+  proxy: p.proxy
+    ? { kind: p.proxy.kind, host: p.proxy.host, port: p.proxy.port, username: p.proxy.username || null, password: p.proxy.password || null }
+    : null,
+});
+
 export async function probe(p: Profile): Promise<DeviceData> {
-  return invoke<DeviceData>("connect", {
-    args: {
-      host: p.host, port: p.port, username: p.username, password: p.password, insecure: p.insecure,
-      proxy: p.proxy
-        ? { kind: p.proxy.kind, host: p.proxy.host, port: p.proxy.port, username: p.proxy.username || null, password: p.proxy.password || null }
-        : null,
-    },
-  });
+  return invoke<DeviceData>("connect", { args: connArgs(p) });
+}
+
+/** read one RouterOS menu (e.g. `ip/address`) through the device's route */
+export async function restGet(p: Profile, path: string): Promise<unknown> {
+  return invoke<unknown>("rest_get", { args: connArgs(p), path });
 }
 
 export function App() {
@@ -95,6 +101,12 @@ export function App() {
   const [draft, setDraft] = useState<Profile>(blank);
   const [useProxy, setUseProxy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [devicesFolded, setDevicesFolded] = useState<boolean>(() => {
+    try { return localStorage.getItem("wingox.devices.folded") === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("wingox.devices.folded", devicesFolded ? "1" : "0"); } catch { /* ignore */ }
+  }, [devicesFolded]);
 
   const refresh = useCallback(async () => {
     try { setProfiles(await invoke<Profile[]>("profiles_list")); }
@@ -213,12 +225,36 @@ export function App() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        {/* devices */}
+        {/* devices — folds to a rail so the device menu and panes get the room */}
+        {devicesFolded ? (
+          <aside className="flex w-11 shrink-0 flex-col items-center gap-1 border-r border-line/80 bg-panel/40 py-2">
+            <button type="button" title="Show devices" onClick={() => setDevicesFolded(false)}
+              className="grid h-7 w-7 place-items-center rounded-md text-ink-faint hover:bg-panel-2 hover:text-ink"><PanelLeftOpen size={15} /></button>
+            <div className="my-1 h-px w-6 bg-line" />
+            {profiles.map((p) => {
+              const open_ = tabs.some((t) => t.id === p.id);
+              return (
+                <button key={p.id} type="button" title={`${p.name} — ${p.host}:${p.port}`}
+                  onClick={() => (open_ ? setActive(p.id) : void open(p))}
+                  className={`grid h-7 w-7 place-items-center rounded-md transition ${
+                    active === p.id ? "bg-accent/15 text-accent" : open_ ? "text-accent/80 hover:bg-panel-2" : "text-ink-faint hover:bg-panel-2 hover:text-ink"}`}>
+                  <Router size={15} />
+                </button>
+              );
+            })}
+            <button type="button" title="New device" onClick={newProfile}
+              className="grid h-7 w-7 place-items-center rounded-md text-ink-faint hover:bg-accent/15 hover:text-accent"><Plus size={15} /></button>
+          </aside>
+        ) : (
         <aside className="flex w-60 shrink-0 flex-col border-r border-line/80 bg-panel/40">
           <div className="flex items-center justify-between px-3 py-2.5">
             <span className="font-mono text-xs uppercase tracking-wide text-ink-faint">Devices</span>
-            <button type="button" title="New device" onClick={newProfile}
-              className="grid h-6 w-6 place-items-center rounded text-ink-faint hover:bg-accent/15 hover:text-accent"><Plus size={15} /></button>
+            <div className="flex items-center gap-0.5">
+              <button type="button" title="New device" onClick={newProfile}
+                className="grid h-6 w-6 place-items-center rounded text-ink-faint hover:bg-accent/15 hover:text-accent"><Plus size={15} /></button>
+              <button type="button" title="Fold devices" onClick={() => setDevicesFolded(true)}
+                className="grid h-6 w-6 place-items-center rounded text-ink-faint hover:bg-panel-2 hover:text-ink"><PanelLeftClose size={14} /></button>
+            </div>
           </div>
           <div className="min-h-0 flex-1 overflow-auto px-2 pb-2">
             {profiles.length === 0 && (
@@ -244,6 +280,7 @@ export function App() {
             })}
           </div>
         </aside>
+        )}
 
         {/* workspace */}
         <section className="flex min-w-0 flex-1 flex-col">
@@ -266,20 +303,19 @@ export function App() {
             </button>
           </nav>
 
-          <div className="flex min-h-0 flex-1 p-2">
+          <div className="flex min-h-0 flex-1">
             {tab ? (
-              <PaneTree
-                pane={tab.layout}
+              <Workspace
+                key={tab.id}
+                profile={tab.profile}
                 data={tab.data}
                 busy={tab.busy}
                 error={tab.error}
-                canClose={tab.layout.kind === "split"}
-                onSplit={(leaf, dir) => patchTab(tab.id, { layout: splitPane(tab.layout, leaf, dir) })}
-                onClose={(leaf) => patchTab(tab.id, { layout: closePane(tab.layout, leaf) ?? newLeaf() })}
-                onView={(leaf, view: View) => patchTab(tab.id, { layout: setPaneView(tab.layout, leaf, view) })}
+                layout={tab.layout}
+                setLayout={(f) => setTabs((list) => list.map((t) => (t.id === tab.id ? { ...t, layout: f(t.layout) } : t)))}
               />
             ) : (
-              <div className="min-h-0 flex-1 overflow-auto">
+              <div className="min-h-0 flex-1 overflow-auto p-2">
                 <ConnectionForm
                   draft={draft} setDraft={setDraft} useProxy={useProxy} setUseProxy={setUseProxy} error={formError}
                   onConnect={() => void open({ ...current(), id: draft.id })} onSave={() => void save()}

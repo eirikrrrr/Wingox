@@ -6,7 +6,8 @@ import { emit } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ArrowDownToLine, RefreshCw, Terminal } from "lucide-react";
 import { AmbientNetwork } from "./AmbientNetwork";
-import { PaneTree, closePane, newLeaf, setPaneView, splitPane, type DeviceData, type Pane } from "./Pane";
+import { newLeaf, type DeviceData, type Pane } from "./Pane";
+import { Workspace } from "./Workspace";
 import { label, probe, useTheme, type DetachPayload } from "./App";
 
 export function Detached({ winLabel }: { winLabel: string }) {
@@ -76,17 +77,8 @@ export function Detached({ winLabel }: { winLabel: string }) {
           </button>
         </div>
       </header>
-      <div className="flex min-h-0 flex-1 p-2">
-        <PaneTree
-          pane={layout}
-          data={data}
-          busy={busy}
-          error={error}
-          canClose={layout.kind === "split"}
-          onSplit={(leaf, dir) => setLayout((l) => splitPane(l, leaf, dir))}
-          onClose={(leaf) => setLayout((l) => closePane(l, leaf) ?? newLeaf())}
-          onView={(leaf, view) => setLayout((l) => setPaneView(l, leaf, view))}
-        />
+      <div className="flex min-h-0 flex-1">
+        <Workspace profile={payload.profile} data={data} busy={busy} error={error} layout={layout} setLayout={setLayout} />
       </div>
     </div>
   );

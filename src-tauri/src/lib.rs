@@ -43,6 +43,32 @@ struct Probe {
 /// facts: identity, version and interfaces.
 #[tauri::command]
 async fn connect(args: ConnectArgs) -> Result<Probe, String> {
+    let client = RestClient::connect(&config(args)).map_err(|e| e.to_string())?;
+    let identity = client.identity().await.map_err(|e| e.to_string())?;
+    let res = client.system_resource().await.map_err(|e| e.to_string())?;
+    let interfaces = client.interfaces().await.map_err(|e| e.to_string())?;
+
+    Ok(Probe {
+        identity: identity.name,
+        version: res.version,
+        board: res.board_name,
+        architecture: res.architecture,
+        cpu_load: res.cpu_load,
+        uptime: res.uptime,
+        interfaces,
+    })
+}
+
+/// Read any RouterOS menu (e.g. `ip/address`) through the same route as the
+/// connection; the menu sidebar opens each section with this.
+#[tauri::command]
+async fn rest_get(args: ConnectArgs, path: String) -> Result<serde_json::Value, String> {
+    let client = RestClient::connect(&config(args)).map_err(|e| e.to_string())?;
+    client.get(&path).await.map_err(|e| e.to_string())
+}
+
+/// the connection (TLS, optional proxy) the UI asked for
+fn config(args: ConnectArgs) -> ConnectionConfig {
     let mut cfg = ConnectionConfig::new(args.host, args.username, args.password);
     cfg.port = args.port;
     if args.insecure {
@@ -59,21 +85,7 @@ async fn connect(args: ConnectArgs) -> Result<Probe, String> {
         }
         cfg.proxy = Some(proxy);
     }
-
-    let client = RestClient::connect(&cfg).map_err(|e| e.to_string())?;
-    let identity = client.identity().await.map_err(|e| e.to_string())?;
-    let res = client.system_resource().await.map_err(|e| e.to_string())?;
-    let interfaces = client.interfaces().await.map_err(|e| e.to_string())?;
-
-    Ok(Probe {
-        identity: identity.name,
-        version: res.version,
-        board: res.board_name,
-        architecture: res.architecture,
-        cpu_load: res.cpu_load,
-        uptime: res.uptime,
-        interfaces,
-    })
+    cfg
 }
 
 #[tauri::command]
@@ -96,6 +108,7 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             connect,
+            rest_get,
             profiles_list,
             profile_save,
             profile_delete
