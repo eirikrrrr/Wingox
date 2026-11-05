@@ -37,3 +37,11 @@ The Rust core and the headless CLI (no GUI, for testing) live in `core/` and
 Windows binaries are built in CI (`.github/workflows/windows.yml`) on every push
 to `main`: download the `.exe`/installers from the run's artifacts. Windows apps
 must be built on Windows (WebView2 + MSVC), so this does not run on Linux.
+
+## Test router (lab)
+
+`dev/routeros-lab.sh` runs a MikroTik RouterOS 7 (CHR, in QEMU/KVM) on this
+host, reachable from the LAN: REST on `:2443` (self-signed), SSH on `:2022`,
+binary API on `:2728`, login `admin` / `admin`. After a container restart
+RouterOS boots fresh: run `dev/routeros-lab.sh rest` to enable REST again.
+A lab only — never expose it outside a trusted network.
