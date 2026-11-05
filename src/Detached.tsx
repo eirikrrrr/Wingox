@@ -1,0 +1,93 @@
+// A device on its own window (detached from the main one), so it can sit on
+// another monitor. It keeps its pane layout, reconnects on open, and can dock
+// back: the main window takes the tab again and this window closes.
+import { useCallback, useEffect, useState } from "react";
+import { emit } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { ArrowDownToLine, RefreshCw, Terminal } from "lucide-react";
+import { AmbientNetwork } from "./AmbientNetwork";
+import { PaneTree, closePane, newLeaf, setPaneView, splitPane, type DeviceData, type Pane } from "./Pane";
+import { label, probe, useTheme, type DetachPayload } from "./App";
+
+export function Detached({ winLabel }: { winLabel: string }) {
+  useTheme();
+  const [payload] = useState<DetachPayload | null>(() => {
+    try {
+      const raw = localStorage.getItem(`wingox.detach.${winLabel}`);
+      return raw ? (JSON.parse(raw) as DetachPayload) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [layout, setLayout] = useState<Pane>(payload?.layout ?? newLeaf());
+  const [data, setData] = useState<DeviceData | null>(payload?.data ?? null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const reconnect = useCallback(async () => {
+    if (!payload) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setData(await probe(payload.profile));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [payload]);
+
+  useEffect(() => { void reconnect(); }, [reconnect]);
+
+  async function dock() {
+    if (!payload) return;
+    try {
+      await emit("wingox-dock", { profile: payload.profile, layout, data } satisfies DetachPayload);
+      localStorage.removeItem(`wingox.detach.${winLabel}`);
+      await getCurrentWebviewWindow().close();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  if (!payload) {
+    return <div className="grid h-full place-items-center font-mono text-sm text-ink-faint">This window has no device.</div>;
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      <AmbientNetwork />
+      <header className="flex items-center gap-3 border-b border-line/80 px-4 py-2.5 backdrop-blur-sm">
+        <span className="grid h-7 w-7 place-items-center rounded-md bg-accent/15 text-accent"><Terminal size={15} /></span>
+        <div className="min-w-0">
+          <div className="truncate font-mono text-sm font-semibold text-ink">{label(payload.profile)}</div>
+          <div className="truncate text-[11px] text-ink-faint">
+            {payload.profile.host}:{payload.profile.port}{payload.profile.proxy ? ` · via ${payload.profile.proxy.kind} ${payload.profile.proxy.host}` : ""}
+          </div>
+        </div>
+        <div className="ml-auto flex items-center gap-1.5">
+          <button type="button" onClick={() => void reconnect()} title="Reconnect"
+            className="flex items-center gap-1.5 rounded-md border border-line-strong bg-panel-2 px-2.5 py-1 font-mono text-xs text-ink-dim hover:text-ink">
+            <RefreshCw size={12} className={busy ? "animate-spin" : ""} /> Reconnect
+          </button>
+          <button type="button" onClick={() => void dock()} title="Dock back into the main window"
+            className="flex items-center gap-1.5 rounded-md bg-accent/90 px-2.5 py-1 font-mono text-xs font-semibold text-bg hover:brightness-110">
+            <ArrowDownToLine size={12} /> Dock
+          </button>
+        </div>
+      </header>
+      <div className="flex min-h-0 flex-1 p-2">
+        <PaneTree
+          pane={layout}
+          data={data}
+          busy={busy}
+          error={error}
+          canClose={layout.kind === "split"}
+          onSplit={(leaf, dir) => setLayout((l) => splitPane(l, leaf, dir))}
+          onClose={(leaf) => setLayout((l) => closePane(l, leaf) ?? newLeaf())}
+          onView={(leaf, view) => setLayout((l) => setPaneView(l, leaf, view))}
+        />
+      </div>
+    </div>
+  );
+}

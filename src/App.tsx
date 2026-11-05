@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   Server, ShieldAlert, Network, Loader2, Terminal, Moon, Sun, SquareTerminal, Flame,
-  User, KeyRound, Plus, Play, Trash2, Save, Router, X,
+  User, KeyRound, Plus, Play, Trash2, Save, Router, X, ExternalLink,
 } from "lucide-react";
 import { AmbientNetwork } from "./AmbientNetwork";
 import { PaneTree, closePane, newLeaf, setPaneView, splitPane, type DeviceData, type Pane, type View } from "./Pane";
 
-type ProxyKind = "socks5" | "http";
+export type ProxyKind = "socks5" | "http";
 
-interface Proxy { kind: ProxyKind; host: string; port: number; username: string; password: string }
+export interface Proxy { kind: ProxyKind; host: string; port: number; username: string; password: string }
 
 export interface Profile {
   id: string;
@@ -23,7 +25,14 @@ export interface Profile {
 }
 
 /** an open device: its connection, what it answered, and its pane layout */
-interface Tab {
+/** what a detached window carries */
+export interface DetachPayload {
+  profile: Profile;
+  layout: Pane;
+  data: DeviceData | null;
+}
+
+export interface Tab {
   id: string;
   profile: Profile;
   data: DeviceData | null;
@@ -32,15 +41,15 @@ interface Tab {
   layout: Pane;
 }
 
-const THEMES = [
+export const THEMES = [
   { id: "dark", label: "Dark", Icon: Moon },
   { id: "light", label: "Light", Icon: Sun },
   { id: "terminal", label: "Terminal", Icon: SquareTerminal },
   { id: "amber", label: "Amber", Icon: Flame },
 ] as const;
-type ThemeId = (typeof THEMES)[number]["id"];
+export type ThemeId = (typeof THEMES)[number]["id"];
 
-function useTheme() {
+export function useTheme() {
   const [theme, setTheme] = useState<ThemeId>(() => {
     try {
       const saved = localStorage.getItem("wingox.theme");
@@ -52,14 +61,22 @@ function useTheme() {
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem("wingox.theme", theme); } catch { /* ignore */ }
   }, [theme]);
+  // a theme chosen in another Wingox window follows here
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "wingox.theme" && e.newValue && THEMES.some((t) => t.id === e.newValue)) setTheme(e.newValue as ThemeId);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
   return [theme, setTheme] as const;
 }
 
-const emptyProxy = (): Proxy => ({ kind: "socks5", host: "", port: 1080, username: "", password: "" });
+export const emptyProxy = (): Proxy => ({ kind: "socks5", host: "", port: 1080, username: "", password: "" });
 const blank = (): Profile => ({ id: "", name: "", host: "", port: 443, username: "admin", password: "", insecure: true, proxy: null });
-const label = (p: Profile) => p.name.trim() || p.host || "device";
+export const label = (p: Profile) => p.name.trim() || p.host || "device";
 
-async function probe(p: Profile): Promise<DeviceData> {
+export async function probe(p: Profile): Promise<DeviceData> {
   return invoke<DeviceData>("connect", {
     args: {
       host: p.host, port: p.port, username: p.username, password: p.password, insecure: p.insecure,
@@ -87,6 +104,36 @@ export function App() {
 
   const patchTab = (id: string, change: Partial<Tab>) =>
     setTabs((list) => list.map((t) => (t.id === id ? { ...t, ...change } : t)));
+
+  // a detached device window docks back: its tab returns here
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    listen<DetachPayload>("wingox-dock", ({ payload }) => {
+      const id = payload.profile.id || `t${Date.now().toString(36)}`;
+      setTabs((list) => [...list.filter((t) => t.id !== id),
+        { id, profile: payload.profile, data: payload.data, busy: false, error: null, layout: payload.layout }]);
+      setActive(id);
+    }).then((u) => { off = u; }).catch(() => { /* outside the desktop shell */ });
+    return () => off?.();
+  }, []);
+
+  /** move a tab to its own window, to place it on another monitor */
+  function detach(t: Tab) {
+    const winLabel = `device-${Date.now().toString(36)}`;
+    const payload: DetachPayload = { profile: t.profile, layout: t.layout, data: t.data };
+    try {
+      localStorage.setItem(`wingox.detach.${winLabel}`, JSON.stringify(payload));
+      const win = new WebviewWindow(winLabel, {
+        url: `index.html?detach=${winLabel}`,
+        title: `Wingox — ${label(t.profile)}`,
+        width: 980, height: 680, minWidth: 520, minHeight: 360,
+      });
+      win.once("tauri://error", (e) => console.warn("detach:", e));
+      closeTab(t.id);
+    } catch (e) {
+      console.warn("detach:", e);
+    }
+  }
 
   /** open (or refocus) a tab for a device and connect it */
   const open = useCallback(async (p: Profile) => {
@@ -207,6 +254,8 @@ export function App() {
                   active === t.id ? "border-line bg-panel text-ink" : "border-transparent text-ink-faint hover:text-ink"}`}>
                 <span className={`h-1.5 w-1.5 rounded-full ${t.error ? "bg-danger" : t.busy ? "bg-amber" : "bg-accent"}`} />
                 <span className="max-w-40 truncate">{label(t.profile)}</span>
+                <button type="button" title="Detach to a window" onClick={(e) => { e.stopPropagation(); detach(t); }}
+                  className="grid h-4 w-4 place-items-center rounded text-ink-faint opacity-60 hover:text-accent hover:opacity-100"><ExternalLink size={11} /></button>
                 <button type="button" title="Close tab" onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
                   className="grid h-4 w-4 place-items-center rounded text-ink-faint opacity-60 hover:text-danger hover:opacity-100"><X size={11} /></button>
               </div>
