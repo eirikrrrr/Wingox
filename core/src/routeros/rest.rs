@@ -1,0 +1,97 @@
+//! The RouterOS 7 REST client: HTTPS to `/rest`, HTTP Basic auth, JSON. The
+//! reqwest client is built once with the connection's proxy and TLS settings,
+//! so every request goes through the same route to the device.
+
+use reqwest::Client;
+use std::time::Duration;
+
+use super::model::{Identity, SystemResource};
+use super::ConnectionConfig;
+use crate::error::{Error, Result};
+use crate::transport::TlsMode;
+
+pub struct RestClient {
+    http: Client,
+    base: String,
+    username: String,
+    password: String,
+}
+
+impl RestClient {
+    /// Build a client for a connection. This only prepares the HTTP client
+    /// (proxy, TLS); the first request is what actually reaches the device.
+    pub fn connect(cfg: &ConnectionConfig) -> Result<Self> {
+        let mut builder = Client::builder()
+            .user_agent(concat!("wingox/", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(30));
+
+        if let Some(proxy) = &cfg.proxy {
+            builder = builder.proxy(proxy.to_reqwest()?);
+        }
+        if cfg.tls == TlsMode::AcceptInvalid {
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+
+        let http = builder.build()?;
+        Ok(Self {
+            http,
+            base: format!("https://{}:{}/rest", cfg.host, cfg.port),
+            username: cfg.username.clone(),
+            password: cfg.password.clone(),
+        })
+    }
+
+    /// GET a REST path and return its parsed JSON.
+    async fn get(&self, path: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/{}", self.base, path.trim_start_matches('/'));
+        let resp = self
+            .http
+            .get(&url)
+            .basic_auth(&self.username, Some(&self.password))
+            .send()
+            .await?;
+        // read the status first: on an error we still report it cleanly even if
+        // reading the body then fails (a device may frame an error response loosely)
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(Error::Api {
+                status: status.as_u16(),
+                message: short(&body),
+            });
+        }
+        serde_json::from_str(&body)
+            .map_err(|e| Error::Other(format!("RouterOS sent invalid JSON: {e}")))
+    }
+
+    pub async fn system_resource(&self) -> Result<SystemResource> {
+        let value = self.get("system/resource").await?;
+        serde_json::from_value(value).map_err(|e| Error::Other(e.to_string()))
+    }
+
+    pub async fn identity(&self) -> Result<Identity> {
+        let value = self.get("system/identity").await?;
+        serde_json::from_value(value).map_err(|e| Error::Other(e.to_string()))
+    }
+
+    /// The interfaces, left as raw JSON rows for now (RouterOS reports some
+    /// fields as "true"/"false" strings; typed models come with the browser).
+    pub async fn interfaces(&self) -> Result<Vec<serde_json::Value>> {
+        match self.get("interface").await? {
+            serde_json::Value::Array(rows) => Ok(rows),
+            other => Ok(vec![other]),
+        }
+    }
+}
+
+/// a RouterOS error body, trimmed to one short line
+fn short(body: &str) -> String {
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(body) {
+        if let Some(serde_json::Value::String(message)) = map.get("message") {
+            return message.clone();
+        }
+    }
+    let line = body.trim().lines().next().unwrap_or("").trim();
+    line.chars().take(200).collect()
+}

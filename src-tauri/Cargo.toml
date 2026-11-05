@@ -1,0 +1,28 @@
+[package]
+name = "wingox"
+version = "0.0.0"
+description = "Wingox — manage MikroTik RouterOS, through a proxy or a jump"
+edition = "2021"
+
+[lib]
+name = "wingox_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wingox-core = { path = "../core" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
+
+# src-tauri is its own Cargo workspace (local target dir), independent of the
+# root workspace that holds `core` and `cli`.
+[workspace]

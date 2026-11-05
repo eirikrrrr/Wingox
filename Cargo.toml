@@ -1,0 +1,10 @@
+# Wingox — Rust workspace. The core library is shared by the headless CLI (for
+# testing, here on the Pi) and, later, the Tauri desktop app.
+[workspace]
+members = ["core", "cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT"

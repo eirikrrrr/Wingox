@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+/* Wingox design tokens — a refined dark terminal look. */
+@theme {
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-bg: #0b0e11;
+  --color-panel: #12161b;
+  --color-panel-2: #171c22;
+  --color-line: #232a31;
+  --color-line-strong: #323b44;
+  --color-ink: #d9dee4;
+  --color-ink-dim: #9aa6b1;
+  --color-ink-faint: #68727c;
+  --color-accent: #4ade80;
+  --color-accent-dim: #2b7a4b;
+  --color-amber: #ffb454;
+  --color-danger: #f0616d;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+/* a faint scanline texture behind everything, for the terminal feel */
+.wx-grid {
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--color-accent) 4%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 4%, transparent) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
