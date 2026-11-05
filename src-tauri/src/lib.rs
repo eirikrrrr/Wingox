@@ -9,6 +9,8 @@ struct ProxyArgs {
     kind: String,
     host: String,
     port: u16,
+    username: Option<String>,
+    password: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -48,7 +50,11 @@ async fn connect(args: ConnectArgs) -> Result<Probe, String> {
             "http" => ProxyKind::Http,
             _ => ProxyKind::Socks5,
         };
-        cfg.proxy = Some(ProxyConfig::new(kind, p.host, p.port));
+        let mut proxy = ProxyConfig::new(kind, p.host, p.port);
+        if let Some(user) = p.username.filter(|u| !u.is_empty()) {
+            proxy = proxy.with_auth(user, p.password.unwrap_or_default());
+        }
+        cfg.proxy = Some(proxy);
     }
 
     let client = RestClient::connect(&cfg).map_err(|e| e.to_string())?;

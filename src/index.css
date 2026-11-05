@@ -1,22 +1,88 @@
 @import "tailwindcss";
 
-/* Wingox design tokens — a refined dark terminal look. */
+/* Wingox themes. The palette is raw `--wx-*` variables swapped per theme; the
+   Tailwind color tokens point at them, so switching `data-theme` re-colors the
+   whole app at runtime. */
 @theme {
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
-  --color-bg: #0b0e11;
-  --color-panel: #12161b;
-  --color-panel-2: #171c22;
-  --color-line: #232a31;
-  --color-line-strong: #323b44;
-  --color-ink: #d9dee4;
-  --color-ink-dim: #9aa6b1;
-  --color-ink-faint: #68727c;
-  --color-accent: #4ade80;
-  --color-accent-dim: #2b7a4b;
-  --color-amber: #ffb454;
-  --color-danger: #f0616d;
+  --color-bg: var(--wx-bg);
+  --color-panel: var(--wx-panel);
+  --color-panel-2: var(--wx-panel-2);
+  --color-line: var(--wx-line);
+  --color-line-strong: var(--wx-line-strong);
+  --color-ink: var(--wx-ink);
+  --color-ink-dim: var(--wx-ink-dim);
+  --color-ink-faint: var(--wx-ink-faint);
+  --color-accent: var(--wx-accent);
+  --color-amber: var(--wx-amber);
+  --color-danger: var(--wx-danger);
+}
+
+/* dark (default) */
+:root,
+:root[data-theme="dark"] {
+  --wx-bg: #0b0e11;
+  --wx-panel: #12161b;
+  --wx-panel-2: #171c22;
+  --wx-line: #232a31;
+  --wx-line-strong: #323b44;
+  --wx-ink: #d9dee4;
+  --wx-ink-dim: #9aa6b1;
+  --wx-ink-faint: #68727c;
+  --wx-accent: #4ade80;
+  --wx-amber: #ffb454;
+  --wx-danger: #f0616d;
+  color-scheme: dark;
+}
+
+/* light */
+:root[data-theme="light"] {
+  --wx-bg: #f5f7f9;
+  --wx-panel: #ffffff;
+  --wx-panel-2: #eef1f4;
+  --wx-line: #dde3e9;
+  --wx-line-strong: #c6cfd8;
+  --wx-ink: #1a2128;
+  --wx-ink-dim: #4a5661;
+  --wx-ink-faint: #8894a0;
+  --wx-accent: #119a5b;
+  --wx-amber: #b4780a;
+  --wx-danger: #cf3341;
+  color-scheme: light;
+}
+
+/* terminal — green on black */
+:root[data-theme="terminal"] {
+  --wx-bg: #000503;
+  --wx-panel: #04110a;
+  --wx-panel-2: #061a0e;
+  --wx-line: #0c3a20;
+  --wx-line-strong: #12592f;
+  --wx-ink: #b9ffce;
+  --wx-ink-dim: #58d98a;
+  --wx-ink-faint: #2f8b58;
+  --wx-accent: #2bff88;
+  --wx-amber: #9dff4d;
+  --wx-danger: #ff5f6a;
+  color-scheme: dark;
+}
+
+/* amber — retro CRT */
+:root[data-theme="amber"] {
+  --wx-bg: #0a0600;
+  --wx-panel: #140d02;
+  --wx-panel-2: #1b1203;
+  --wx-line: #3a2a08;
+  --wx-line-strong: #5b4310;
+  --wx-ink: #ffd79a;
+  --wx-ink-dim: #d79a4a;
+  --wx-ink-faint: #8a6327;
+  --wx-accent: #ffb000;
+  --wx-amber: #ff8a00;
+  --wx-danger: #ff6b4a;
+  color-scheme: dark;
 }
 
 html,
@@ -31,16 +97,61 @@ body {
   color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  transition: background 0.4s ease, color 0.4s ease;
 }
 
 ::selection {
   background: color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
 
-/* a faint scanline texture behind everything, for the terminal feel */
-.wx-grid {
-  background-image:
-    linear-gradient(color-mix(in srgb, var(--color-accent) 4%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 4%, transparent) 1px, transparent 1px);
-  background-size: 28px 28px;
+/* an elegant rise-in for panels on first paint */
+@keyframes wx-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.wx-rise {
+  animation: wx-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* a terminal cursor that blinks */
+@keyframes wx-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.wx-cursor {
+  animation: wx-blink 1.1s steps(1) infinite;
+}
+
+/* a soft pulse for the "connected" dot */
+@keyframes wx-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 60%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-accent) 0%, transparent);
+  }
+}
+.wx-pulse {
+  animation: wx-pulse 2s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wx-rise,
+  .wx-cursor,
+  .wx-pulse {
+    animation: none;
+  }
 }

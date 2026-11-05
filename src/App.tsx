@@ -1,6 +1,10 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Server, ShieldAlert, Network, Cpu, Clock, Boxes, Loader2, Terminal } from "lucide-react";
+import {
+  Server, ShieldAlert, Network, Cpu, Clock, Boxes, Loader2, Terminal,
+  Moon, Sun, SquareTerminal, Flame, User, KeyRound,
+} from "lucide-react";
+import { AmbientNetwork } from "./AmbientNetwork";
 
 type ProxyKind = "socks5" | "http";
 
@@ -14,7 +18,38 @@ interface Probe {
   interfaces: Record<string, unknown>[];
 }
 
+const THEMES = [
+  { id: "dark", label: "Dark", Icon: Moon },
+  { id: "light", label: "Light", Icon: Sun },
+  { id: "terminal", label: "Terminal", Icon: SquareTerminal },
+  { id: "amber", label: "Amber", Icon: Flame },
+] as const;
+type ThemeId = (typeof THEMES)[number]["id"];
+
+function useTheme() {
+  const [theme, setTheme] = useState<ThemeId>(() => {
+    try {
+      const saved = localStorage.getItem("wingox.theme");
+      if (saved && THEMES.some((t) => t.id === saved)) return saved as ThemeId;
+    } catch {
+      /* ignore */
+    }
+    return "dark";
+  });
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem("wingox.theme", theme);
+    } catch {
+      /* ignore */
+    }
+  }, [theme]);
+  return [theme, setTheme] as const;
+}
+
 export function App() {
+  const [theme, setTheme] = useTheme();
+
   const [host, setHost] = useState("");
   const [port, setPort] = useState(443);
   const [username, setUsername] = useState("admin");
@@ -24,6 +59,8 @@ export function App() {
   const [proxyKind, setProxyKind] = useState<ProxyKind>("socks5");
   const [proxyHost, setProxyHost] = useState("");
   const [proxyPort, setProxyPort] = useState(1080);
+  const [proxyUser, setProxyUser] = useState("");
+  const [proxyPass, setProxyPass] = useState("");
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,12 +74,16 @@ export function App() {
     try {
       const result = await invoke<Probe>("connect", {
         args: {
-          host,
-          port,
-          username,
-          password,
-          insecure,
-          proxy: useProxy ? { kind: proxyKind, host: proxyHost, port: proxyPort } : null,
+          host, port, username, password, insecure,
+          proxy: useProxy
+            ? {
+                kind: proxyKind,
+                host: proxyHost,
+                port: proxyPort,
+                username: proxyUser || null,
+                password: proxyPass || null,
+              }
+            : null,
         },
       });
       setProbe(result);
@@ -54,28 +95,38 @@ export function App() {
   }
 
   return (
-    <div className="min-h-full wx-grid">
-      <header className="flex items-center gap-3 border-b border-line px-6 py-4">
+    <div className="min-h-full">
+      <AmbientNetwork />
+
+      <header className="flex items-center gap-3 border-b border-line/80 px-6 py-4 backdrop-blur-sm">
         <span className="grid h-9 w-9 place-items-center rounded-md bg-accent/15 text-accent">
           <Terminal size={18} />
         </span>
         <div>
           <h1 className="font-mono text-lg font-semibold tracking-tight text-ink">
-            wingox<span className="text-accent">_</span>
+            wingox<span className="wx-cursor text-accent">▌</span>
           </h1>
           <p className="text-xs text-ink-faint">manage MikroTik RouterOS — through a proxy or a jump</p>
         </div>
-        <span className="ml-auto rounded border border-line px-2 py-0.5 font-mono text-[11px] text-ink-faint">
-          alpha
-        </span>
+        <div className="ml-auto flex items-center gap-1 rounded-lg border border-line bg-panel/70 p-1">
+          {THEMES.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              title={label}
+              onClick={() => setTheme(id)}
+              className={`grid h-7 w-7 place-items-center rounded-md transition ${
+                theme === id ? "bg-accent/20 text-accent" : "text-ink-faint hover:text-ink"
+              }`}
+            >
+              <Icon size={15} />
+            </button>
+          ))}
+        </div>
       </header>
 
       <main className="mx-auto grid max-w-5xl gap-6 px-6 py-8 lg:grid-cols-[380px_1fr]">
-        {/* connection form */}
-        <form
-          onSubmit={connect}
-          className="h-fit rounded-xl border border-line bg-panel p-5 shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]"
-        >
+        <form onSubmit={connect} className="wx-rise h-fit rounded-xl border border-line bg-panel/90 p-5">
           <h2 className="mb-4 flex items-center gap-2 font-mono text-sm font-semibold text-ink-dim">
             <Server size={15} className="text-accent" /> New connection
           </h2>
@@ -106,8 +157,8 @@ export function App() {
           </label>
 
           {useProxy && (
-            <div className="mb-3 rounded-lg border border-line-strong bg-panel-2 p-3">
-              <div className="grid grid-cols-[88px_1fr_80px] gap-2">
+            <div className="wx-rise mb-3 space-y-2 rounded-lg border border-line-strong bg-panel-2 p-3">
+              <div className="grid grid-cols-[88px_1fr_76px] gap-2">
                 <select className={input} value={proxyKind} onChange={(e) => setProxyKind(e.target.value as ProxyKind)}>
                   <option value="socks5">SOCKS5</option>
                   <option value="http">HTTP</option>
@@ -115,6 +166,17 @@ export function App() {
                 <input className={input} value={proxyHost} onChange={(e) => setProxyHost(e.target.value)} placeholder="proxy host" />
                 <input className={input} type="number" value={proxyPort} onChange={(e) => setProxyPort(+e.target.value)} />
               </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center gap-2 rounded-md border border-line-strong bg-panel px-2">
+                  <User size={13} className="text-ink-faint" />
+                  <input className={bare} value={proxyUser} onChange={(e) => setProxyUser(e.target.value)} placeholder="proxy user" />
+                </div>
+                <div className="flex items-center gap-2 rounded-md border border-line-strong bg-panel px-2">
+                  <KeyRound size={13} className="text-ink-faint" />
+                  <input className={bare} type="password" value={proxyPass} onChange={(e) => setProxyPass(e.target.value)} placeholder="proxy password" />
+                </div>
+              </div>
+              <p className="text-[11px] text-ink-faint">Optional — leave empty if the proxy needs no login.</p>
             </div>
           )}
 
@@ -128,29 +190,30 @@ export function App() {
           </button>
         </form>
 
-        {/* result */}
         <section className="min-w-0">
           {!probe && !error && (
-            <div className="grid h-full min-h-[280px] place-items-center rounded-xl border border-dashed border-line text-center">
+            <div className="wx-rise grid h-full min-h-[280px] place-items-center rounded-xl border border-dashed border-line text-center">
               <div className="text-ink-faint">
                 <Terminal size={28} className="mx-auto mb-3 opacity-50" />
-                <p className="font-mono text-sm">Connect to a router to see it here.</p>
+                <p className="font-mono text-sm">
+                  Connect to a router to see it here<span className="wx-cursor">▌</span>
+                </p>
                 <p className="mt-1 text-xs">Its traffic goes directly, or through the proxy you set.</p>
               </div>
             </div>
           )}
 
           {error && (
-            <div className="rounded-xl border border-danger/40 bg-danger/10 p-4 font-mono text-sm text-danger">
+            <div className="wx-rise rounded-xl border border-danger/40 bg-danger/10 p-4 font-mono text-sm text-danger">
               {error}
             </div>
           )}
 
           {probe && (
             <div className="space-y-4">
-              <div className="rounded-xl border border-line bg-panel p-5">
+              <div className="wx-rise rounded-xl border border-line bg-panel/90 p-5">
                 <div className="flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-full bg-accent shadow-[0_0_10px] shadow-accent" />
+                  <span className="wx-pulse h-2 w-2 rounded-full bg-accent" />
                   <h2 className="font-mono text-lg font-semibold text-ink">{probe.identity}</h2>
                 </div>
                 <p className="mt-1 font-mono text-sm text-ink-dim">
@@ -163,7 +226,7 @@ export function App() {
                 </div>
               </div>
 
-              <div className="overflow-hidden rounded-xl border border-line bg-panel">
+              <div className="wx-rise overflow-hidden rounded-xl border border-line bg-panel/90">
                 <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 font-mono text-xs text-ink-dim">
                   <Network size={13} className="text-accent" /> interfaces
                 </div>
@@ -194,6 +257,7 @@ export function App() {
 
 const input =
   "w-full rounded-md border border-line-strong bg-panel-2 px-3 py-2 font-mono text-sm text-ink outline-none placeholder:text-ink-faint focus:border-accent";
+const bare = "w-full bg-transparent py-2 font-mono text-sm text-ink outline-none placeholder:text-ink-faint";
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
