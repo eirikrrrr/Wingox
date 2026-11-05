@@ -1,7 +1,10 @@
 //! The Tauri desktop shell. It exposes `wingox-core` to the React UI as
 //! commands; no networking logic lives here.
 
+mod store;
+
 use serde::{Deserialize, Serialize};
+use store::Profile;
 use wingox_core::{ConnectionConfig, ProxyConfig, ProxyKind, RestClient, TlsMode};
 
 #[derive(Deserialize)]
@@ -73,10 +76,30 @@ async fn connect(args: ConnectArgs) -> Result<Probe, String> {
     })
 }
 
+#[tauri::command]
+fn profiles_list(app: tauri::AppHandle) -> Result<Vec<Profile>, String> {
+    store::load(&app)
+}
+
+#[tauri::command]
+fn profile_save(app: tauri::AppHandle, profile: Profile) -> Result<Profile, String> {
+    store::upsert(&app, profile)
+}
+
+#[tauri::command]
+fn profile_delete(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    store::delete(&app, &id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![connect])
+        .invoke_handler(tauri::generate_handler![
+            connect,
+            profiles_list,
+            profile_save,
+            profile_delete
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
