@@ -12,6 +12,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { KeyRound, Loader2, RotateCw, SquareTerminal, TriangleAlert } from "lucide-react";
 import type { Profile } from "./App";
+import { monoCss, useSettings } from "./settings";
 
 interface HostKeyInfo { algorithm: string; sha256: string }
 interface SshError { kind: "hostKeyUnknown" | "hostKeyMismatch" | "other"; message: string; got?: string; expected?: string; algorithm?: string }
@@ -74,6 +75,9 @@ export function SshTerminal({ profile, onPinHostKey }: { profile: Profile; onPin
   const fit = useRef<FitAddon | null>(null);
   const session = useRef<string | null>(null);
   const [phase, setPhase] = useState<Phase>({ at: "checking" });
+  const { settings } = useSettings();
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   // the profile at the time of (re)connecting — a later edit does not drop a live session
   const profileRef = useRef(profile);
   profileRef.current = profile;
@@ -118,11 +122,13 @@ export function SshTerminal({ profile, onPinHostKey }: { profile: Profile; onPin
 
   // the terminal itself lives as long as the pane
   useEffect(() => {
+    const st = settingsRef.current;
     const t = new XTerm({
-      fontFamily: '"JetBrains Mono", ui-monospace, monospace',
-      fontSize: 13,
-      cursorBlink: true,
-      scrollback: 5000,
+      fontFamily: monoCss(st),
+      fontSize: st.termFontSize,
+      cursorStyle: st.termCursor,
+      cursorBlink: st.termBlink,
+      scrollback: st.termScrollback,
       allowProposedApi: false,
       theme: themeFromCss(),
     });
@@ -154,7 +160,7 @@ export function SshTerminal({ profile, onPinHostKey }: { profile: Profile; onPin
     ro.observe(host.current!);
     // follow the Wingox theme
     const mo = new MutationObserver(() => { t.options.theme = themeFromCss(); });
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style"] });
 
     void connect();
     return () => {
@@ -168,6 +174,20 @@ export function SshTerminal({ profile, onPinHostKey }: { profile: Profile; onPin
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // preferences changed (Settings ▸ Terminal / Appearance): apply to the open terminal
+  useEffect(() => {
+    const t = term.current;
+    if (!t) return;
+    t.options.fontFamily = monoCss(settings);
+    t.options.fontSize = settings.termFontSize;
+    t.options.cursorStyle = settings.termCursor;
+    t.options.cursorBlink = settings.termBlink;
+    t.options.scrollback = settings.termScrollback;
+    // the provider applies the colors after this effect runs: read them next frame
+    requestAnimationFrame(() => { if (term.current) term.current.options.theme = themeFromCss(); });
+    try { fit.current?.fit(); } catch { /* hidden */ }
+  }, [settings]);
 
   // focus once the terminal is visible (a hidden one cannot take the focus)
   useEffect(() => {

@@ -38,7 +38,6 @@ export interface MonitorEvent {
 
 /** failures in a row before a device counts as down (one lost probe is not an outage) */
 export const DOWN_AFTER = 2;
-export const INTERVALS = [10, 30, 60, 300] as const;
 
 interface Watched {
   id: string;

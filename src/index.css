@@ -63,6 +63,17 @@
   color-scheme: light;
 }
 
+/* table density (Settings ▸ Appearance) */
+:root {
+  --wx-row-py: 0.25rem;
+}
+:root[data-density="compact"] {
+  --wx-row-py: 1px;
+}
+:root[data-density="comfortable"] {
+  --wx-row-py: 0.45rem;
+}
+
 html,
 body,
 #root {

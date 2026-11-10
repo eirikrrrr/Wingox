@@ -9,6 +9,7 @@
     "core:window:allow-close",
     "core:window:allow-set-focus",
     "notification:default",
-    "opener:default"
+    "opener:default",
+    "core:webview:allow-set-webview-zoom"
   ]
 }

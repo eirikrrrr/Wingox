@@ -9,10 +9,9 @@ import { ArrowDownToLine, LockOpen, RefreshCw, Terminal } from "lucide-react";
 import { AmbientNetwork } from "./AmbientNetwork";
 import { newLeaf, normalizePane, type DeviceData, type Pane } from "./Pane";
 import { Workspace } from "./Workspace";
-import { PLAIN_HTTP_TITLE, isPlainHttp, label, probe, useTheme, type DetachPayload } from "./App";
+import { PLAIN_HTTP_TITLE, isPlainHttp, label, probe, type DetachPayload } from "./App";
 
 export function Detached({ winLabel }: { winLabel: string }) {
-  useTheme();
   const [payload] = useState<DetachPayload | null>(() => {
     try {
       const raw = localStorage.getItem(`wingox.detach.${winLabel}`);

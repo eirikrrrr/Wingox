@@ -8,12 +8,13 @@ import "@fontsource/inter/600.css";
 import "./index.css";
 import { App } from "./App";
 import { Detached } from "./Detached";
+import { SettingsProvider } from "./settings";
 
 // a detached device window opens this same page with ?detach=<window label>
 const detach = new URLSearchParams(window.location.search).get("detach");
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    {detach ? <Detached winLabel={detach} /> : <App />}
+    <SettingsProvider>{detach ? <Detached winLabel={detach} /> : <App />}</SettingsProvider>
   </React.StrictMode>,
 );

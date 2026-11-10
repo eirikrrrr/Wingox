@@ -1,6 +1,7 @@
 //! The Tauri desktop shell. It exposes `wingox-core` to the React UI as
 //! commands; no networking logic lives here.
 
+mod settings;
 mod store;
 
 use serde::{Deserialize, Serialize};
@@ -292,6 +293,16 @@ fn config(args: ConnectArgs) -> ConnectionConfig {
 }
 
 #[tauri::command]
+fn settings_get(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    settings::load(&app)
+}
+
+#[tauri::command]
+fn settings_save(app: tauri::AppHandle, settings: serde_json::Value) -> Result<(), String> {
+    settings::save(&app, settings)
+}
+
+#[tauri::command]
 fn profiles_list(app: tauri::AppHandle) -> Result<Vec<Profile>, String> {
     store::load(&app)
 }
@@ -328,6 +339,8 @@ pub fn run() {
             ssh_write,
             ssh_resize,
             ssh_close,
+            settings_get,
+            settings_save,
             profiles_list,
             profile_save,
             profile_delete

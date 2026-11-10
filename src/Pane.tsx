@@ -508,11 +508,11 @@ function RestView({ section, fetcher, find }: { section: Section; fetcher: Fetch
               return (
                 <RowGroup key={String(r[".id"] ?? i)} comment={r.comment ? String(r.comment) : null} span={columns.length + 1}>
                   <tr className={`border-b border-line/40 hover:bg-accent/5 ${rt}`}>
-                    <td className="whitespace-nowrap px-2 py-1 font-semibold" title={flags.map(([, , t]) => t).join(", ")}>
+                    <td className="whitespace-nowrap px-2 py-[var(--wx-row-py)] font-semibold" title={flags.map(([, , t]) => t).join(", ")}>
                       {flags.map(([k, l, , t]) => <span key={k} className={t}>{l}</span>)}
                     </td>
                     {columns.map((c) => (
-                      <td key={c} className={`truncate whitespace-nowrap px-2 py-1 ${plain ? tone(c, r[c]) : ""}`} title={fmt(r[c])}>{fmt(r[c])}</td>
+                      <td key={c} className={`truncate whitespace-nowrap px-2 py-[var(--wx-row-py)] ${plain ? tone(c, r[c]) : ""}`} title={fmt(r[c])}>{fmt(r[c])}</td>
                     ))}
                   </tr>
                 </RowGroup>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { WebviewWindow, getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
@@ -8,7 +8,8 @@ import {
   LockOpen, Lock, TriangleAlert, Activity, LogOut, BellRing, CircleCheck, Pencil,
 } from "lucide-react";
 import { CertCard, CertificateSection, fetchCertificate, normalizePin, tlsModeOf, type CertificateInfo, type TlsMode } from "./Certificate";
-import { DOWN_AFTER, INTERVALS, ago, notify, useMonitor, type MonitorEvent, type ReachState } from "./monitor";
+import { DOWN_AFTER, ago, notify, useMonitor, type MonitorEvent, type ReachState } from "./monitor";
+import { MONITOR_INTERVALS, SettingsButton, beep, useSettings } from "./settings";
 import { AmbientNetwork } from "./AmbientNetwork";
 import { newLeaf, normalizePane, type DeviceData, type Pane } from "./Pane";
 import { Workspace } from "./Workspace";
@@ -73,29 +74,6 @@ export const THEMES = [
 ] as const;
 export type ThemeId = (typeof THEMES)[number]["id"];
 
-export function useTheme() {
-  const [theme, setTheme] = useState<ThemeId>(() => {
-    try {
-      const saved = localStorage.getItem("wingox.theme");
-      if (saved && THEMES.some((t) => t.id === saved)) return saved as ThemeId;
-    } catch { /* ignore */ }
-    return "dark";
-  });
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    try { localStorage.setItem("wingox.theme", theme); } catch { /* ignore */ }
-  }, [theme]);
-  // a theme chosen in another Wingox window follows here
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === "wingox.theme" && e.newValue && THEMES.some((t) => t.id === e.newValue)) setTheme(e.newValue as ThemeId);
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
-  return [theme, setTheme] as const;
-}
-
 export const emptyProxy = (): Proxy => ({ kind: "socks5", host: "", port: 1080, username: "", password: "" });
 const blank = (): Profile => ({
   id: "", name: "", host: "", scheme: "https", port: 443, username: "admin", password: "",
@@ -127,7 +105,12 @@ export async function restGet(p: Profile, path: string): Promise<unknown> {
 }
 
 export function App() {
-  const [theme, setTheme] = useTheme();
+  const { settings, update: updateSettings, resolvedTheme } = useSettings();
+  const monitorEvery = settings.monitorEvery;
+  const setMonitorEvery = (n: number) => updateSettings({ monitorEvery: n });
+  // the current settings for callbacks memoized once (open() below)
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string>("new");
@@ -138,10 +121,6 @@ export function App() {
   const [tofu, setTofu] = useState<{ profile: Profile; cert: CertificateInfo } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmLogout, setConfirmLogout] = useState<{ windows: string[] } | null>(null);
-  const [monitorEvery, setMonitorEvery] = useState<number>(() => {
-    try { const v = Number(localStorage.getItem("wingox.monitor.every")); return INTERVALS.includes(v as never) ? v : 30; } catch { return 30; }
-  });
-  useEffect(() => { try { localStorage.setItem("wingox.monitor.every", String(monitorEvery)); } catch { /* ignore */ } }, [monitorEvery]);
   const [devicesFolded, setDevicesFolded] = useState<boolean>(() => {
     try { return localStorage.getItem("wingox.devices.folded") === "1"; } catch { return false; }
   });
@@ -179,8 +158,12 @@ export function App() {
     const key = `${e.id}-${e.at}`;
     setToasts((list) => [...list.filter((t) => t.id !== e.id), { ...e, key }].slice(-6));
     if (e.kind === "up") setTimeout(() => setToasts((list) => list.filter((t) => t.key !== key)), 8000);
-    void notify(e.kind === "down" ? `${e.name} is not answering` : `${e.name} is back`,
-      e.kind === "down" ? e.detail : `${e.name} ${e.detail}`);
+    if (e.kind === "up" && !settings.notifyRecovery) return;
+    if (settings.sound && e.kind === "down") beep();
+    if (settings.osNotifications) {
+      void notify(e.kind === "down" ? `${e.name} is not answering` : `${e.name} is back`,
+        e.kind === "down" ? e.detail : `${e.name} ${e.detail}`);
+    }
   });
   async function toggleMonitor(p: Profile) {
     try {
@@ -193,6 +176,7 @@ export function App() {
   // ── close every session at once ───────────────────────────────────────────
   async function askLogoutAll() {
     let windows: string[] = [];
+    if (!settings.confirmCloseAll) return void logoutAll();
     try { windows = (await getAllWebviewWindows()).map((w) => w.label).filter((l) => l.startsWith("device-")); } catch { /* not in the shell */ }
     setConfirmLogout({ windows });
   }
@@ -258,7 +242,7 @@ export function App() {
     setTabs((list) => {
       const existing = list.find((t) => t.id === id);
       if (existing) return list.map((t) => (t.id === id ? { ...t, profile: p, busy: true, error: null } : t));
-      return [...list, { id, profile: p, data: null, busy: true, error: null, layout: newLeaf("overview") }];
+      return [...list, { id, profile: p, data: null, busy: true, error: null, layout: newLeaf(settingsRef.current.defaultView) }];
     });
     setActive(id);
     try {
@@ -337,12 +321,13 @@ export function App() {
         </div>
         <div className="ml-auto flex items-center gap-1 rounded-lg border border-line bg-panel/70 p-1">
           {THEMES.map(({ id, label: name, Icon }) => (
-            <button key={id} type="button" title={name} onClick={() => setTheme(id)}
-              className={`grid h-7 w-7 place-items-center rounded-md transition ${theme === id ? "bg-accent/20 text-accent" : "text-ink-faint hover:text-ink"}`}>
+            <button key={id} type="button" title={name} onClick={() => updateSettings({ theme: id })}
+              className={`grid h-7 w-7 place-items-center rounded-md transition ${resolvedTheme === id ? "bg-accent/20 text-accent" : "text-ink-faint hover:text-ink"}`}>
               <Icon size={15} />
             </button>
           ))}
         </div>
+        <SettingsButton />
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -598,7 +583,7 @@ function MonitorBar({ watched, down, every, setEvery }: { watched: number; down:
       )}
       <select value={every} onChange={(e) => setEvery(Number(e.target.value))} title="Probe every"
         className="ml-auto rounded border border-line bg-panel px-1 py-0.5 text-[10.5px] text-ink-dim outline-none">
-        {INTERVALS.map((n) => <option key={n} value={n}>{n < 60 ? `${n}s` : `${n / 60}m`}</option>)}
+        {MONITOR_INTERVALS.map((n) => <option key={n} value={n}>{n < 60 ? `${n}s` : `${n / 60}m`}</option>)}
       </select>
     </div>
   );
