@@ -212,6 +212,25 @@ flowchart LR
   panel, pestaña, ventana o "Close all". RouterOS sondea el tamaño del terminal
   con consultas de posición del cursor, que xterm.js responde; para scripts la
   CLI usa el sufijo de login `+ct` de RouterOS.
+- **Documentación oficial por sección** — el icono del libro de cada panel abre
+  la página de esa sección en help.mikrotik.com, en el apartado exacto. Los
+  enlaces los genera y verifica (el apartado existe, la página responde 200)
+  `dev/docs-links.py` en `src/docsLinks.ts`; una sección sin enlace cae a una
+  búsqueda en la documentación.
+- **Configuración** (tuerca) — apariencia (tema, incluido "sistema", acento,
+  tipografías de interfaz y de datos, tamaño de la interfaz con el zoom nativo
+  de la webview, densidad de las tablas), terminal (tamaño de fuente, cursor,
+  historial), comportamiento (sección al abrir, intervalo del monitor,
+  confirmar "Close all", restablecer anchos de columna) y notificaciones. La
+  guarda el backend en `settings.json` y se difunde a todas las ventanas.
+- **Espacios de trabajo** — guardar las sesiones abiertas con un nombre: el
+  dispositivo de cada pestaña (por id de perfil, nunca una contraseña), su árbol
+  de paneles y secciones, la pestaña activa y las ventanas separadas con su
+  posición y tamaño, en `workspaces.json`. Al reabrir se cierran las sesiones
+  actuales, las pestañas se abren de tres en tres, los avisos de certificado en
+  el primer contacto salen en cola uno a uno y se saltan los dispositivos que ya
+  no existen. Las sesiones SSH vivas y los datos del router no se guardan: los
+  terminales reconectan y las tablas se recargan.
 - **Monitor de alcance** — los perfiles se pueden vigilar. Un ping ICMP no
   atraviesa un proxy SOCKS/HTTP (solo transportan TCP), así que cada ronda sondea
   los servicios TCP del router por su propia ruta (proxy incluido), sin

@@ -205,6 +205,23 @@ flowchart LR
   end with their pane, tab, window or "Close all". RouterOS probes the terminal
   size with cursor-position queries, which xterm.js answers; for scripts the CLI
   uses RouterOS's `+ct` login suffix.
+- **Official docs per section** — each pane's book icon opens that section's
+  page of help.mikrotik.com at the exact heading. The links are generated and
+  verified (heading exists, page answers 200) by `dev/docs-links.py` into
+  `src/docsLinks.ts`; a section without one falls back to a docs search.
+- **Settings** (gear) — appearance (theme incl. "system", accent, UI/data
+  fonts, interface size via the webview's native zoom, table density),
+  terminal (font size, cursor, scrollback), behaviour (opening section,
+  monitor interval, confirm "Close all", reset column widths) and
+  notifications. Stored by the backend in `settings.json`, broadcast to every
+  window on save.
+- **Workspaces** — save the open sessions under a name: each tab's device (by
+  profile id, never a password), its pane tree and sections, the active tab,
+  and detached windows with their position and size, in `workspaces.json`.
+  Reopening closes the current sessions, opens tabs three at a time, queues
+  first-contact certificate prompts one by one, and skips devices that no
+  longer exist. Live SSH sessions and router data are not saved: terminals
+  reconnect and tables reload.
 - **Reachability monitor** — profiles can be watched. An ICMP ping cannot cross
   a SOCKS/HTTP proxy (they relay TCP only), so each round probes the router's TCP
   services along its own route (proxy included), without credentials: its web
