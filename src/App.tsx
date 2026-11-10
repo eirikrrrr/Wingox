@@ -331,7 +331,10 @@ export function App() {
       <header className="flex items-center gap-3 border-b border-line/80 px-5 py-3 backdrop-blur-sm">
         <span className="grid h-9 w-9 place-items-center rounded-md bg-accent/15 text-accent"><Terminal size={18} /></span>
         <div>
-          <h1 className="font-mono text-base font-semibold tracking-tight text-ink">wingox<span className="wx-cursor text-accent">▌</span></h1>
+          <h1 className="flex items-center gap-2 font-mono text-base font-semibold tracking-tight text-ink">
+            <span>wingox<span className="wx-cursor text-accent">▌</span></span>
+            <ReleaseBadge />
+          </h1>
           <p className="text-[11px] text-ink-faint">manage MikroTik RouterOS — through a proxy or a jump</p>
         </div>
         <div className="ml-auto flex items-center gap-1 rounded-lg border border-line bg-panel/70 p-1">
@@ -530,6 +533,19 @@ export function App() {
         ))}
       </div>
     </div>
+  );
+}
+
+/** the version, and its channel (alpha / beta) when it is not a stable release */
+function ReleaseBadge() {
+  const version = __APP_VERSION__;
+  const channel = /-(alpha|beta|rc)/.exec(version)?.[1];
+  return (
+    <span title={channel ? `Wingox ${version} — ${channel} release: expect rough edges` : `Wingox ${version}`}
+      className={`rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide ${
+        channel ? "bg-amber/15 text-amber" : "bg-panel-2 text-ink-faint"}`}>
+      {channel ? `${channel} · v${version}` : `v${version}`}
+    </span>
   );
 }
 

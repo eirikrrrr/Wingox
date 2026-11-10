@@ -1,7 +1,12 @@
-# Publishes a GitHub release when a version tag is pushed (git tag v0.1.0 &&
-# git push origin v0.1.0): builds the Windows app and attaches the installers,
-# a portable exe and their SHA-256 sums. Nothing is published if the build
-# fails or the tag does not match the app's version.
+# Publishes a GitHub release when a version tag is pushed (git tag v0.1.0-alpha.1
+# && git push origin v0.1.0-alpha.1): builds the Windows app and attaches the
+# installers, a portable exe and their SHA-256 sums. Nothing is published if the
+# build fails or the tag does not match the app's version.
+#
+# Channels: a tag with a suffix (v0.2.0-alpha.3, -beta.1, -rc.1) is published as
+# a GitHub *pre-release* titled with its channel; a plain vX.Y.Z is a stable
+# release. The MSI cannot carry a text suffix, so src-tauri/tauri.conf.json sets
+# bundle.windows.wix.version to X.Y.Z.N (N = the pre-release number).
 name: Release
 
 on:
@@ -63,4 +68,10 @@ jobs:
         run: |
           notes=".github/release-notes/$GITHUB_REF_NAME.md"
           if [ -f "$notes" ]; then args=(--notes-file "$notes"); else args=(--generate-notes); fi
-          gh release create "$GITHUB_REF_NAME" release/* --title "Wingox $GITHUB_REF_NAME" "${args[@]}"
+          channel=$(echo "$GITHUB_REF_NAME" | sed -nE 's/^v[0-9.]+-(alpha|beta|rc).*/\1/p')
+          if [ -n "$channel" ]; then
+            gh release create "$GITHUB_REF_NAME" release/* --prerelease \
+              --title "Wingox $GITHUB_REF_NAME ($channel)" "${args[@]}"
+          else
+            gh release create "$GITHUB_REF_NAME" release/* --latest --title "Wingox $GITHUB_REF_NAME" "${args[@]}"
+          fi

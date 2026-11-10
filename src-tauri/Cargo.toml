@@ -1,6 +1,6 @@
 [package]
 name = "wingox"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 description = "Wingox — manage MikroTik RouterOS, through a proxy or a jump"
 edition = "2021"
 

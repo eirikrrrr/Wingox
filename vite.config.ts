@@ -5,10 +5,13 @@ import tailwindcss from "@tailwindcss/vite";
 import process from "node:process";
 
 const host = process.env.TAURI_DEV_HOST;
+// the app version (package.json), shown in the header with its release channel
+const version: string = process.env.npm_package_version ?? "0.0.0";
 
 // Tauri expects a fixed dev port and leaves rust errors visible.
 export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],
+  define: { __APP_VERSION__: JSON.stringify(version) },
   clearScreen: false,
   server: {
     port: 1420,
