@@ -32,6 +32,9 @@ enable_rest() {
   sleep 4
   ros "/ip service set www-ssl certificate=rest disabled=no vrf=$vrf"
   ros "/ip service set api disabled=no vrf=$vrf"
+  # slirp hands the guest the client's real source IP (only 127.0.0.1 becomes 10.0.2.2),
+  # so the management VRF needs a default route back through slirp to answer LAN clients
+  ros ":if ([:len [/ip route find comment=wingox-lab]] = 0) do={ /ip route add dst-address=0.0.0.0/0 gateway=10.0.2.2@$vrf routing-table=$vrf comment=wingox-lab }"
   echo "REST ready: https://<this-host>:2443/rest  (admin / $PASSWORD, self-signed)"
 }
 
