@@ -6,9 +6,11 @@
 
 pub mod error;
 pub mod routeros;
+pub mod tls;
 pub mod transport;
 
 pub use error::{Error, Result};
-pub use routeros::rest::RestClient;
+pub use routeros::rest::{fetch_certificate, reach, RestClient};
+pub use tls::CertificateInfo;
 pub use routeros::{ConnectionConfig, Scheme};
 pub use transport::{ProxyConfig, ProxyKind, TlsMode};

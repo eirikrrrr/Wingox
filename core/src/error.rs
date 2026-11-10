@@ -27,10 +27,21 @@ pub enum Error {
 
     /// the device's certificate did not validate (RouterOS ships self-signed ones)
     #[error(
-        "the router's TLS certificate is not trusted (self-signed or for another name). Enable \
-         \"Allow self-signed certificate\" if you expect that. [{detail}]"
+        "the router's TLS certificate is not trusted (self-signed, from a private CA, or for another \
+         name). RouterOS certificates are usually self-signed: pin this router's certificate \
+         (Certificate = Pinned, then Fetch), or trust the CA that issued it (Certificate = Trusted \
+         CA). [{detail}]"
     )]
     Certificate { detail: String },
+
+    /// the router presented a certificate other than the pinned one
+    #[error(
+        "the router's certificate CHANGED — it does not match the pinned fingerprint. Expected \
+         {expected}, got {got}. If you renewed the certificate on the router, fetch and pin the new \
+         one (compare it with /certificate print on the router); otherwise someone may be \
+         intercepting the connection: do not continue."
+    )]
+    PinMismatch { expected: String, got: String },
 
     /// the HTTP proxy answered the CONNECT with an error status
     #[error(
@@ -39,6 +50,10 @@ pub enum Error {
          or this client is not allowed to use it."
     )]
     ProxyRefused { host: String, port: u16 },
+
+    /// nothing came back in time (the router, or the proxy on its behalf, did not answer)
+    #[error("no answer from {host}:{port} in time (timed out) — the router or the path to it is down")]
+    Timeout { host: String, port: u16 },
 
     /// the proxy wants credentials (HTTP 407)
     #[error("the proxy requires authentication (HTTP 407): set or fix the proxy user and password")]
@@ -65,6 +80,16 @@ impl Error {
         if lower.contains("proxy authorization required") {
             return Error::ProxyAuth;
         }
+        if let Some(at) = chain.find(crate::tls::PIN_MISMATCH) {
+            let rest = &chain[at..];
+            let field = |key: &str| {
+                rest.split_whitespace()
+                    .find_map(|w| w.strip_prefix(key))
+                    .map(|v| crate::tls::pretty_fingerprint(v.trim_end_matches(|c: char| !c.is_ascii_hexdigit())))
+                    .unwrap_or_default()
+            };
+            return Error::PinMismatch { expected: field("expected="), got: field("got=") };
+        }
         if lower.contains("tunnel error: unsuccessful") || lower.contains("unsuccessful tunnel") {
             return Error::ProxyRefused { host: host.to_string(), port };
         }
@@ -82,6 +107,9 @@ impl Error {
             || lower.contains("no cipher suites in common")
         {
             return Error::TlsHandshake { host: host.to_string(), port, detail: chain };
+        }
+        if err.is_timeout() {
+            return Error::Timeout { host: host.to_string(), port };
         }
         Error::Http(err)
     }

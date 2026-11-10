@@ -5,21 +5,23 @@
 
 use crate::error::{Error, Result};
 
-/// How strictly the device's TLS certificate is checked. RouterOS ships a
-/// self-signed certificate, so `Verify` fails until a real one is installed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How the device's TLS certificate is trusted. RouterOS ships self-signed
+/// certificates, so `Verify` (public roots) usually fails; `Pinned` and
+/// `TrustedCa` are the safe ways to trust a router (see `tls.rs`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum TlsMode {
-    /// standard chain validation (for a router with a trusted certificate)
+    /// standard chain validation against the public roots
+    #[default]
     Verify,
-    /// skip verification — lab/first-contact only; the UI shows a clear warning.
-    /// Certificate pinning (trust-on-first-use) replaces this in a later slice.
+    /// accept exactly the certificate with this SHA-256 fingerprint
+    /// (lowercase hex, see `tls::normalize_fingerprint`)
+    Pinned(String),
+    /// validate the chain and the name against this CA (PEM, one or more certs)
+    /// in addition to the public roots
+    TrustedCa(String),
+    /// skip verification — anything is accepted, including an impostor; the
+    /// UI shows a clear warning. Pinning is the safe replacement.
     AcceptInvalid,
-}
-
-impl Default for TlsMode {
-    fn default() -> Self {
-        TlsMode::Verify
-    }
 }
 
 /// The kind of proxy a connection routes its traffic through.

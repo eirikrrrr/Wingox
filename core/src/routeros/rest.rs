@@ -4,11 +4,13 @@
 //! so every request goes through the same route to the device.
 
 use reqwest::Client;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use super::model::{Identity, SystemResource};
 use super::{ConnectionConfig, Scheme};
 use crate::error::{Error, Result};
+use crate::tls::{self, CertificateInfo};
 use crate::transport::TlsMode;
 
 pub struct RestClient {
@@ -20,26 +22,50 @@ pub struct RestClient {
     password: String,
 }
 
+/// a reqwest client that reaches the device the way `cfg` says (proxy, TLS)
+fn http_client(cfg: &ConnectionConfig, tls_mode: &TlsMode, timeout: Duration) -> Result<Client> {
+    let mut builder = Client::builder()
+        .user_agent(concat!("wingox/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(timeout.min(Duration::from_secs(15)))
+        .timeout(timeout);
+
+    if let Some(proxy) = &cfg.proxy {
+        builder = builder.proxy(proxy.to_reqwest()?);
+    }
+    if cfg.scheme == Scheme::Https {
+        builder = match tls_mode {
+            TlsMode::Verify => builder,
+            TlsMode::AcceptInvalid => builder.danger_accept_invalid_certs(true),
+            TlsMode::TrustedCa(pem) => {
+                let mut b = builder;
+                for cert in tls::ca_roots(pem)? {
+                    b = b.add_root_certificate(cert);
+                }
+                b
+            }
+            TlsMode::Pinned(pin) => {
+                let pin = tls::normalize_fingerprint(pin).ok_or_else(|| {
+                    Error::Other("the pinned fingerprint is not a SHA-256 (64 hex digits)".into())
+                })?;
+                builder.use_preconfigured_tls(tls::pinned_config(Some(pin), Arc::default())?)
+            }
+        };
+    }
+    Ok(builder.build()?)
+}
+
+fn base_url(cfg: &ConnectionConfig) -> String {
+    format!("{}://{}:{}", cfg.scheme.as_str(), cfg.host, cfg.port)
+}
+
 impl RestClient {
     /// Build a client for a connection. This only prepares the HTTP client
     /// (proxy, TLS); the first request is what actually reaches the device.
     pub fn connect(cfg: &ConnectionConfig) -> Result<Self> {
-        let mut builder = Client::builder()
-            .user_agent(concat!("wingox/", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(Duration::from_secs(15))
-            .timeout(Duration::from_secs(30));
-
-        if let Some(proxy) = &cfg.proxy {
-            builder = builder.proxy(proxy.to_reqwest()?);
-        }
-        if cfg.scheme == Scheme::Https && cfg.tls == TlsMode::AcceptInvalid {
-            builder = builder.danger_accept_invalid_certs(true);
-        }
-
-        let http = builder.build()?;
+        let http = http_client(cfg, &cfg.tls, Duration::from_secs(30))?;
         Ok(Self {
             http,
-            base: format!("{}://{}:{}/rest", cfg.scheme.as_str(), cfg.host, cfg.port),
+            base: format!("{}/rest", base_url(cfg)),
             host: cfg.host.clone(),
             port: cfg.port,
             username: cfg.username.clone(),
@@ -99,6 +125,59 @@ impl RestClient {
             other => Ok(vec![other]),
         }
     }
+}
+
+/// Read the router's TLS certificate without trusting it and without sending
+/// anything else: the handshake is aborted right after the certificate
+/// arrives, so no credentials ever leave. Goes through the connection's proxy.
+pub async fn fetch_certificate(cfg: &ConnectionConfig) -> Result<CertificateInfo> {
+    if cfg.scheme != Scheme::Https {
+        return Err(Error::Other("plain HTTP has no certificate".into()));
+    }
+    let seen: Arc<Mutex<Option<Vec<u8>>>> = Arc::default();
+    let mut plain = cfg.clone();
+    plain.tls = TlsMode::Verify; // replaced below by the capturing verifier
+    let mut builder = Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(20))
+        .use_preconfigured_tls(tls::pinned_config(None, seen.clone())?);
+    if let Some(proxy) = &cfg.proxy {
+        builder = builder.proxy(proxy.to_reqwest()?);
+    }
+    let client = builder.build()?;
+    let outcome = client.get(format!("{}/", base_url(cfg))).send().await;
+    let captured = seen.lock().ok().and_then(|s| s.clone());
+    match (captured, outcome) {
+        (Some(der), _) => Ok(CertificateInfo::from_der(&der)),
+        (None, Err(e)) => Err(Error::from_request(e, &cfg.host, cfg.port)),
+        (None, Ok(_)) => Err(Error::Other("the router sent no certificate".into())),
+    }
+}
+
+/// Is the router reachable along its route (proxy included)? An
+/// unauthenticated GET of the web service's root: any answer from the router
+/// counts, no credentials are sent and the certificate is not checked (nothing
+/// secret travels). ICMP cannot cross a SOCKS/HTTP proxy, so this is the
+/// "ping" that works for every connection. Returns the round trip.
+pub async fn reach(cfg: &ConnectionConfig, timeout: Duration) -> Result<Duration> {
+    let client = http_client(cfg, &TlsMode::AcceptInvalid, timeout)?;
+    let started = Instant::now();
+    let resp = client
+        .get(format!("{}/", base_url(cfg)))
+        .send()
+        .await
+        .map_err(|e| Error::from_request(e, &cfg.host, cfg.port))?;
+    let elapsed = started.elapsed();
+    // an HTTP proxy forwarding plain HTTP answers 502/503/504 itself when it
+    // cannot reach the router (Squid adds X-Squid-Error)
+    let status = resp.status().as_u16();
+    let from_proxy = cfg.proxy.is_some()
+        && matches!(status, 502..=504)
+        && (resp.headers().contains_key("x-squid-error") || resp.headers().contains_key("via"));
+    if from_proxy {
+        return Err(Error::Other(format!("the proxy could not reach the router (HTTP {status})")));
+    }
+    Ok(elapsed)
 }
 
 /// a RouterOS error body, trimmed to one short line

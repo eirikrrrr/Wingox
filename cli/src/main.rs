@@ -5,7 +5,13 @@
 //! idea (proxy connectivity) here on the Pi, before any UI.
 //!
 //! Usage:
-//!   wingox <host> <user> <password> [--port 443] [--insecure] [--http] [--proxy <url>]
+//!   wingox <host> <user> <password> [--port 443] [--insecure | --pin <sha256> | --ca <pem-file>]
+//!          [--http] [--proxy <url>] [--fetch-cert] [--reach]
+//!
+//! --pin accepts only the certificate with that SHA-256 fingerprint; --ca
+//! verifies the chain and the name against that CA. --fetch-cert prints the
+//! router's certificate (nothing else is sent), --reach checks reachability
+//! without credentials.
 //!
 //! --http talks to the router's plain-HTTP `www` service (port 80) instead of
 //! `www-ssl`: NOTHING is encrypted, the RouterOS password travels in clear text.
@@ -17,7 +23,7 @@
 
 use std::env;
 
-use wingox_core::{ConnectionConfig, ProxyConfig, ProxyKind, RestClient, Scheme, TlsMode};
+use wingox_core::{fetch_certificate, reach, ConnectionConfig, ProxyConfig, ProxyKind, RestClient, Scheme, TlsMode};
 
 #[tokio::main]
 async fn main() {
@@ -42,6 +48,13 @@ async fn run() -> Result<(), String> {
     if args.insecure {
         cfg.tls = TlsMode::AcceptInvalid;
     }
+    if let Some(pin) = &args.pin {
+        cfg.tls = TlsMode::Pinned(pin.clone());
+    }
+    if let Some(file) = &args.ca {
+        let pem = std::fs::read_to_string(file).map_err(|e| format!("--ca {file}: {e}"))?;
+        cfg.tls = TlsMode::TrustedCa(pem);
+    }
     if let Some(url) = args.proxy.as_deref() {
         cfg.proxy = Some(parse_proxy(url)?);
     }
@@ -51,6 +64,22 @@ async fn run() -> Result<(), String> {
         None => "directly".to_string(),
     };
     eprintln!("connecting to {}://{}:{} {via}…", cfg.scheme.as_str(), cfg.host, cfg.port);
+
+    if args.fetch_cert {
+        let c = fetch_certificate(&cfg).await.map_err(|e| e.to_string())?;
+        println!("sha256      {}", c.sha256_pretty);
+        println!("subject     {}", c.subject);
+        println!("issuer      {}{}", c.issuer, if c.self_signed { "  (self-signed)" } else { "" });
+        println!("valid       {} → {}", c.not_before, c.not_after);
+        println!("alt names   {}", c.subject_alt_names.join(", "));
+        println!("\npin it with: --pin {}", c.sha256);
+        return Ok(());
+    }
+    if args.reach {
+        let rtt = reach(&cfg, std::time::Duration::from_secs(8)).await.map_err(|e| e.to_string())?;
+        println!("reachable — {} ms", rtt.as_millis());
+        return Ok(());
+    }
 
     let client = RestClient::connect(&cfg).map_err(|e| e.to_string())?;
     let identity = client.identity().await.map_err(|e| e.to_string())?;
@@ -91,6 +120,10 @@ struct Args {
     port: Option<u16>,
     insecure: bool,
     http: bool,
+    pin: Option<String>,
+    ca: Option<String>,
+    fetch_cert: bool,
+    reach: bool,
     proxy: Option<String>,
 }
 
@@ -100,6 +133,7 @@ impl Args {
         let mut port: Option<u16> = None;
         let mut insecure = false;
         let mut http = false;
+        let (mut pin, mut ca, mut fetch_cert, mut reach) = (None, None, false, false);
         let mut proxy: Option<String> = None;
 
         let mut it = env::args().skip(1);
@@ -107,6 +141,10 @@ impl Args {
             match arg.as_str() {
                 "--insecure" | "-k" => insecure = true,
                 "--http" => http = true,
+                "--pin" => pin = Some(next(&mut it, "--pin")?),
+                "--ca" => ca = Some(next(&mut it, "--ca")?),
+                "--fetch-cert" => fetch_cert = true,
+                "--reach" => reach = true,
                 "--port" => port = Some(next(&mut it, "--port")?.parse().map_err(|_| "bad --port")?),
                 "--proxy" => proxy = Some(next(&mut it, "--proxy")?),
                 "-h" | "--help" => return Err(USAGE.to_string()),
@@ -117,8 +155,10 @@ impl Args {
 
         let env_opt = |k: &str| env::var(k).ok().filter(|v| !v.is_empty());
         let host = positional.first().cloned().or_else(|| env_opt("WINGOX_HOST"));
-        let user = positional.get(1).cloned().or_else(|| env_opt("WINGOX_USER"));
-        let pass = positional.get(2).cloned().or_else(|| env_opt("WINGOX_PASS"));
+        // --fetch-cert / --reach send no credentials, so they are optional there
+        let no_login = fetch_cert || reach;
+        let user = positional.get(1).cloned().or_else(|| env_opt("WINGOX_USER")).or(no_login.then(String::new));
+        let pass = positional.get(2).cloned().or_else(|| env_opt("WINGOX_PASS")).or(no_login.then(String::new));
         if proxy.is_none() {
             proxy = env_opt("WINGOX_PROXY");
         }
@@ -139,6 +179,10 @@ impl Args {
             port,
             insecure,
             http,
+            pin,
+            ca,
+            fetch_cert,
+            reach,
             proxy,
         })
     }
@@ -172,4 +216,4 @@ fn parse_proxy(url: &str) -> Result<ProxyConfig, String> {
 }
 
 const USAGE: &str =
-    "usage: wingox <host> <user> <password> [--port 443] [--insecure] [--http] [--proxy socks5://host:port]";
+    "usage: wingox <host> [<user> <password>] [--port 443] [--insecure | --pin <sha256> | --ca <pem>] [--http] [--proxy socks5://host:port] [--fetch-cert] [--reach]";

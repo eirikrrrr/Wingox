@@ -11,3 +11,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+# certificate pinning: our own rustls verifier, handed to reqwest
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ring = "0.17"
+# to show a certificate's subject/issuer/validity before the user pins it
+x509-parser = { version = "0.17", default-features = false }
