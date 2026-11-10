@@ -283,21 +283,81 @@ function BuiltIn({ id, data }: { id: string; data: DeviceData }) {
 
 type Row = Record<string, unknown>;
 
-/** WinBox-style flag letters, from the boolean fields RouterOS reports */
-const FLAGS: [key: string, letter: string, title: string][] = [
-  ["disabled", "X", "disabled"],
-  ["invalid", "I", "invalid"],
-  ["dynamic", "D", "dynamic"],
-  ["running", "R", "running"],
-  ["active", "A", "active"],
-  ["slave", "S", "slave"],
+/** WinBox-style flag letters, from the boolean fields RouterOS reports, each with its color */
+const FLAGS: [key: string, letter: string, title: string, tone: string][] = [
+  ["disabled", "X", "disabled", "text-ink-faint"],
+  ["invalid", "I", "invalid", "text-danger"],
+  ["dynamic", "D", "dynamic", "text-dyn"],
+  ["running", "R", "running", "text-ok"],
+  ["active", "A", "active", "text-ok"],
+  ["slave", "S", "slave", "text-info"],
 ];
 const HIDDEN = new Set([".id", ".nextid", "comment", ...FLAGS.map(([k]) => k)]);
 const truthy = (v: unknown) => v === true || v === "true";
 
+// values that read as a state, colored the same everywhere (status, state, running…)
+const GOOD = new Set(["true", "yes", "up", "running", "bound", "established", "connected", "link-ok", "ok", "active",
+  "reachable", "enabled", "done", "finished", "authorized", "registered", "permanent", "full-duplex", "master"]);
+const WARN = new Set(["searching", "requesting", "offered", "waiting", "connecting", "negotiating", "syn-sent", "syn-received",
+  "time-wait", "close-wait", "fin-wait", "stale", "delay", "probe", "incomplete", "rebinding", "renewing", "testing", "unknown"]);
+const BAD = new Set(["false", "no", "down", "failed", "error", "invalid", "no-link", "disabled", "unreachable", "rejected",
+  "timeout", "expired", "half-duplex", "not-running", "lost"]);
+const IP = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?(%\S+)?$|^[0-9a-f]*:[0-9a-f:]+(\/\d{1,3})?$/i;
+const MAC = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
+/** columns whose true/false is itself a state (for the rest a boolean stays neutral) */
+const STATE_COLS = /(^|-)(running|active|connected|enabled|link|state|status|up)($|-)/;
+
+/** a Tailwind text color for one cell */
+function tone(col: string, v: unknown): string {
+  const text = fmt(v).trim().toLowerCase();
+  if (!text) return "";
+  if (text === "true" || text === "false") return STATE_COLS.test(col) ? (text === "true" ? "text-ok" : "text-danger") : "text-ink-dim";
+  if (GOOD.has(text)) return "text-ok";
+  if (WARN.has(text)) return "text-amber";
+  if (BAD.has(text)) return "text-danger";
+  if (MAC.test(text)) return "text-ink-dim";
+  if (IP.test(text)) return "text-info";
+  return "";
+}
+
+/** a whole row's tone: invalid red, disabled faint, a log line by its topics */
+function rowTone(r: Row, isLog: boolean): string {
+  if (truthy(r.invalid)) return "text-danger";
+  if (truthy(r.disabled)) return "text-ink-faint";
+  if (isLog) {
+    const topics = String(r.topics ?? "");
+    if (/critical|error/.test(topics)) return "text-danger";
+    if (/warning/.test(topics)) return "text-amber";
+    if (/debug|packet/.test(topics)) return "text-ink-faint";
+  }
+  return "text-ink";
+}
+
+const FLAG_COL = 44;
+const MIN_COL = 36;
+const MAX_AUTO = 480;
+const colsKey = (sectionId: string) => `wingox.cols.${sectionId}`;
+function loadWidths(sectionId: string): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(colsKey(sectionId)) ?? "{}") as Record<string, number>; } catch { return {}; }
+}
+
+let measurer: CanvasRenderingContext2D | null = null;
+/** the width a column needs to show its longest value (and its header) in full */
+function fitWidth(col: string, rows: Row[]): number {
+  measurer ??= document.createElement("canvas").getContext("2d");
+  if (!measurer) return 140;
+  measurer.font = '12px "JetBrains Mono", ui-monospace, monospace';
+  let w = measurer.measureText(col).width + 22; // header text + sort arrow room
+  for (const r of rows) w = Math.max(w, measurer.measureText(fmt(r[col])).width);
+  return Math.min(Math.max(Math.ceil(w) + 18, MIN_COL), MAX_AUTO);
+}
+
 function RestView({ section, fetcher, find }: { section: Section; fetcher: Fetcher; find: string }) {
   const [state, setState] = useState<{ loading: boolean; error: string | null; value: unknown }>({ loading: true, error: null, value: null });
   const [sort, setSort] = useState<{ col: string; asc: boolean } | null>(null);
+  // column widths, like WinBox: drag a header's edge, double-click it to fit; remembered per section
+  const [widths, setWidths] = useState<Record<string, number>>(() => loadWidths(section.id));
+  const resizing = useRef(false);
 
   useEffect(() => {
     let live = true;
@@ -316,6 +376,38 @@ function RestView({ section, fetcher, find }: { section: Section; fetcher: Fetch
     const first = (section.columns ?? []).filter((c) => seen.has(c));
     return [...first, ...[...seen].filter((c) => !first.includes(c))];
   }, [rows, section.columns]);
+
+  // a column without a remembered width starts fitted to its content (capped)
+  const widthOf = (c: string) => widths[c] ?? Math.min(fitWidth(c, rows ?? []), 280);
+  const setWidth = (c: string, w: number) =>
+    setWidths((all) => {
+      const next = { ...all, [c]: Math.max(MIN_COL, Math.round(w)) };
+      try { localStorage.setItem(colsKey(section.id), JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+
+  function startResize(col: string, e: ReactPointerEvent<HTMLSpanElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    resizing.current = true;
+    const startX = e.clientX;
+    const base = widthOf(col);
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+    document.body.style.cursor = "col-resize";
+    const move = (ev: PointerEvent) => setWidth(col, base + ev.clientX - startX);
+    const up = () => {
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", up);
+      target.removeEventListener("pointercancel", up);
+      document.body.style.cursor = "";
+      // the click that ends a drag must not sort
+      setTimeout(() => { resizing.current = false; }, 0);
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", up);
+    target.addEventListener("pointercancel", up);
+  }
 
   const shown = useMemo(() => {
     if (!rows) return [];
@@ -346,7 +438,7 @@ function RestView({ section, fetcher, find }: { section: Section; fetcher: Fetch
             {entries.map(([k, v]) => (
               <tr key={k} className="border-b border-line/40 last:border-0">
                 <td className="w-1/3 py-1 pr-3 text-ink-faint">{k}</td>
-                <td className="break-all py-1 text-ink">{fmt(v)}</td>
+                <td className={`break-all py-1 ${tone(k, v) || "text-ink"}`}>{fmt(v)}</td>
               </tr>
             ))}
           </tbody>
@@ -355,39 +447,53 @@ function RestView({ section, fetcher, find }: { section: Section; fetcher: Fetch
     );
   }
 
-  const toggleSort = (col: string) =>
+  const toggleSort = (col: string) => {
+    if (resizing.current) return;
     setSort((s) => (s?.col === col ? (s.asc ? { col, asc: false } : null) : { col, asc: true }));
+  };
+  const isLog = section.id === "log";
+  const total = FLAG_COL + columns.reduce((sum, c) => sum + widthOf(c), 0);
 
   return (
     <>
       <div className="min-h-0 flex-1 overflow-auto">
-        <table className="w-max min-w-full font-mono text-xs">
+        <table className="table-fixed font-mono text-xs" style={{ width: total }}>
+          <colgroup>
+            <col style={{ width: FLAG_COL }} />
+            {columns.map((c) => <col key={c} style={{ width: widthOf(c) }} />)}
+          </colgroup>
           <thead className="sticky top-0 z-10 bg-panel-2">
             <tr className="text-left text-ink-faint">
-              <th className="w-10 border-b border-line px-2 py-1 font-normal" />
+              <th className="border-b border-line px-2 py-1 font-normal" />
               {columns.map((c) => (
                 <th key={c} onClick={() => toggleSort(c)}
-                  className="cursor-pointer select-none whitespace-nowrap border-b border-l border-line px-2 py-1 font-normal hover:text-ink">
-                  <span className="inline-flex items-center gap-1">
-                    {c}
-                    {sort?.col === c && (sort.asc ? <ArrowUp size={10} /> : <ArrowDown size={10} />)}
+                  className="relative cursor-pointer select-none overflow-hidden border-b border-l border-line px-2 py-1 font-normal hover:text-ink">
+                  <span className="flex items-center gap-1 overflow-hidden">
+                    <span className="truncate">{c}</span>
+                    {sort?.col === c && (sort.asc ? <ArrowUp size={10} className="shrink-0" /> : <ArrowDown size={10} className="shrink-0" />)}
                   </span>
+                  <span role="separator" aria-orientation="vertical" title="Drag to resize · double-click to fit"
+                    onPointerDown={(e) => startResize(c, e)}
+                    onClick={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => { e.stopPropagation(); setWidth(c, fitWidth(c, rows)); }}
+                    className="absolute inset-y-0 right-0 w-1.5 cursor-col-resize hover:bg-accent/40" />
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
             {shown.map((r, i) => {
-              const off = truthy(r.disabled);
               const flags = FLAGS.filter(([k]) => truthy(r[k]));
+              const rt = rowTone(r, isLog);
+              const plain = rt === "text-ink";
               return (
                 <RowGroup key={String(r[".id"] ?? i)} comment={r.comment ? String(r.comment) : null} span={columns.length + 1}>
-                  <tr className={`border-b border-line/40 hover:bg-accent/5 ${off ? "text-ink-faint" : "text-ink"}`}>
-                    <td className="whitespace-nowrap px-2 py-1 text-ink-dim" title={flags.map(([, , t]) => t).join(", ")}>
-                      {flags.map(([, l]) => l).join("")}
+                  <tr className={`border-b border-line/40 hover:bg-accent/5 ${rt}`}>
+                    <td className="whitespace-nowrap px-2 py-1 font-semibold" title={flags.map(([, , t]) => t).join(", ")}>
+                      {flags.map(([k, l, , t]) => <span key={k} className={t}>{l}</span>)}
                     </td>
                     {columns.map((c) => (
-                      <td key={c} className="max-w-72 truncate whitespace-nowrap px-2 py-1" title={fmt(r[c])}>{fmt(r[c])}</td>
+                      <td key={c} className={`truncate whitespace-nowrap px-2 py-1 ${plain ? tone(c, r[c]) : ""}`} title={fmt(r[c])}>{fmt(r[c])}</td>
                     ))}
                   </tr>
                 </RowGroup>
@@ -397,10 +503,24 @@ function RestView({ section, fetcher, find }: { section: Section; fetcher: Fetch
         </table>
         {shown.length === 0 && <Centered>{rows.length ? "nothing matches" : "empty"}</Centered>}
       </div>
-      <div className="border-t border-line bg-panel-2/60 px-2 py-0.5 font-mono text-[10px] text-ink-faint">
-        {shown.length === rows.length ? items(rows.length) : `${shown.length} of ${items(rows.length)}`}
+      <div className="flex items-center gap-3 border-t border-line bg-panel-2/60 px-2 py-0.5 font-mono text-[10px] text-ink-faint">
+        <span>{shown.length === rows.length ? items(rows.length) : `${shown.length} of ${items(rows.length)}`}</span>
+        <Legend rows={rows} />
       </div>
     </>
+  );
+}
+
+/** the flag letters present in this list, with what they mean */
+function Legend({ rows }: { rows: Row[] }) {
+  const present = FLAGS.filter(([k]) => rows.some((r) => truthy(r[k])));
+  if (!present.length) return null;
+  return (
+    <span className="ml-auto hidden gap-2 truncate @[22rem]:flex">
+      {present.map(([k, l, title, t]) => (
+        <span key={k}><span className={`font-semibold ${t}`}>{l}</span> {title}</span>
+      ))}
+    </span>
   );
 }
 
@@ -410,7 +530,7 @@ function RowGroup({ comment, span, children }: { comment: string | null; span: n
     <>
       {comment && (
         <tr>
-          <td colSpan={span} className="px-2 pt-1 font-mono text-[11px] text-ink-faint">;;; {comment}</td>
+          <td colSpan={span} className="truncate px-2 pt-1 font-mono text-[11px] text-ink-faint">;;; {comment}</td>
         </tr>
       )}
       {children}

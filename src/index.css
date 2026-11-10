@@ -18,6 +18,10 @@
   --color-accent: var(--wx-accent);
   --color-amber: var(--wx-amber);
   --color-danger: var(--wx-danger);
+  /* status colors for device data (flags, states, addresses) */
+  --color-ok: var(--wx-ok);
+  --color-info: var(--wx-info);
+  --color-dyn: var(--wx-dyn);
 }
 
 /* dark (default) */
@@ -34,6 +38,9 @@
   --wx-accent: #4ade80;
   --wx-amber: #ffb454;
   --wx-danger: #f0616d;
+  --wx-ok: #4ade80;
+  --wx-info: #60a5fa;
+  --wx-dyn: #c084fc;
   color-scheme: dark;
 }
 
@@ -50,38 +57,48 @@
   --wx-accent: #119a5b;
   --wx-amber: #b4780a;
   --wx-danger: #cf3341;
+  --wx-ok: #15803d;
+  --wx-info: #2563eb;
+  --wx-dyn: #7c3aed;
   color-scheme: light;
 }
 
-/* terminal — green on black */
+/* terminal — a calm green-on-charcoal console: muted sage instead of neon,
+   charcoal instead of pure black, so long sessions stay easy on the eyes */
 :root[data-theme="terminal"] {
-  --wx-bg: #000503;
-  --wx-panel: #04110a;
-  --wx-panel-2: #061a0e;
-  --wx-line: #0c3a20;
-  --wx-line-strong: #12592f;
-  --wx-ink: #b9ffce;
-  --wx-ink-dim: #58d98a;
-  --wx-ink-faint: #2f8b58;
-  --wx-accent: #2bff88;
-  --wx-amber: #9dff4d;
-  --wx-danger: #ff5f6a;
+  --wx-bg: #0f1412;
+  --wx-panel: #141a17;
+  --wx-panel-2: #19201c;
+  --wx-line: #252e29;
+  --wx-line-strong: #333e38;
+  --wx-ink: #c5d3ca;
+  --wx-ink-dim: #93a89b;
+  --wx-ink-faint: #64776b;
+  --wx-accent: #7dc497;
+  --wx-amber: #d6b46c;
+  --wx-danger: #df7b78;
+  --wx-ok: #86c99b;
+  --wx-info: #7fb2c6;
+  --wx-dyn: #b39bd6;
   color-scheme: dark;
 }
 
-/* amber — retro CRT */
+/* amber — warm sepia, a soft nod to amber CRTs without the glare */
 :root[data-theme="amber"] {
-  --wx-bg: #0a0600;
-  --wx-panel: #140d02;
-  --wx-panel-2: #1b1203;
-  --wx-line: #3a2a08;
-  --wx-line-strong: #5b4310;
-  --wx-ink: #ffd79a;
-  --wx-ink-dim: #d79a4a;
-  --wx-ink-faint: #8a6327;
-  --wx-accent: #ffb000;
-  --wx-amber: #ff8a00;
-  --wx-danger: #ff6b4a;
+  --wx-bg: #15120e;
+  --wx-panel: #1b1713;
+  --wx-panel-2: #211c17;
+  --wx-line: #2e2720;
+  --wx-line-strong: #3d342a;
+  --wx-ink: #e4d9c6;
+  --wx-ink-dim: #b2a38b;
+  --wx-ink-faint: #7c6f5c;
+  --wx-accent: #dca35c;
+  --wx-amber: #e3bf6b;
+  --wx-danger: #d9786c;
+  --wx-ok: #a8c07a;
+  --wx-info: #8eafc2;
+  --wx-dyn: #c39bcf;
   color-scheme: dark;
 }
 
