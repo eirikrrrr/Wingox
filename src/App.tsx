@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { emit, listen } from "@tauri-apps/api/event";
+import { WebviewWindow, getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import {
-  Server, ShieldAlert, Network, Loader2, Terminal, Moon, Sun, SquareTerminal, Flame,
+  Server, Network, Loader2, Terminal, Moon, Sun, SquareTerminal, Flame,
   User, KeyRound, Plus, Play, Trash2, Save, Router, X, ExternalLink, PanelLeftClose, PanelLeftOpen,
-  LockOpen, Lock, TriangleAlert,
+  LockOpen, Lock, TriangleAlert, Activity, LogOut, BellRing, CircleCheck,
 } from "lucide-react";
+import { CertCard, CertificateSection, fetchCertificate, normalizePin, tlsModeOf, type CertificateInfo, type TlsMode } from "./Certificate";
+import { DOWN_AFTER, INTERVALS, ago, notify, useMonitor, type MonitorEvent, type ReachState } from "./monitor";
 import { AmbientNetwork } from "./AmbientNetwork";
 import { newLeaf, normalizePane, type DeviceData, type Pane } from "./Pane";
 import { Workspace } from "./Workspace";
@@ -33,6 +35,14 @@ export interface Profile {
   username: string;
   password: string;
   insecure: boolean;
+  /** how the certificate is trusted; missing on older profiles (see tlsModeOf) */
+  tlsMode?: TlsMode | "";
+  /** pinned SHA-256 of the router's certificate */
+  pin?: string;
+  /** trusted CA certificate(s), PEM */
+  caPem?: string;
+  /** watched by the reachability monitor */
+  monitor?: boolean;
   proxy: Proxy | null;
 }
 
@@ -85,15 +95,25 @@ export function useTheme() {
 }
 
 export const emptyProxy = (): Proxy => ({ kind: "socks5", host: "", port: 1080, username: "", password: "" });
-const blank = (): Profile => ({ id: "", name: "", host: "", scheme: "https", port: 443, username: "admin", password: "", insecure: true, proxy: null });
+const blank = (): Profile => ({
+  id: "", name: "", host: "", scheme: "https", port: 443, username: "admin", password: "",
+  insecure: false, tlsMode: "pinned", pin: "", caPem: "", monitor: false, proxy: null,
+});
 export const label = (p: Profile) => p.name.trim() || p.host || "device";
 
-const connArgs = (p: Profile) => ({
+export const connArgs = (p: Profile) => ({
   host: p.host, scheme: p.scheme ?? "https", port: p.port, username: p.username, password: p.password, insecure: p.insecure,
+  tlsMode: tlsModeOf(p), pin: normalizePin(p.pin ?? ""), caPem: p.caPem ?? "",
   proxy: p.proxy
     ? { kind: p.proxy.kind, host: p.proxy.host, port: p.proxy.port, username: p.proxy.username || null, password: p.proxy.password || null }
     : null,
 });
+
+/** pinned but nothing pinned yet: the certificate must be shown and accepted first */
+const needsPin = (p: Profile) =>
+  (p.scheme ?? "https") === "https" && tlsModeOf(p) === "pinned" && !/^[0-9a-f]{64}$/.test(normalizePin(p.pin ?? ""));
+
+interface Toast extends MonitorEvent { key: string }
 
 export async function probe(p: Profile): Promise<DeviceData> {
   return invoke<DeviceData>("connect", { args: connArgs(p) });
@@ -112,6 +132,14 @@ export function App() {
   const [draft, setDraft] = useState<Profile>(blank);
   const [useProxy, setUseProxy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  /** first contact with a pinned profile: its certificate, waiting for the user's OK */
+  const [tofu, setTofu] = useState<{ profile: Profile; cert: CertificateInfo } | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [confirmLogout, setConfirmLogout] = useState<{ windows: string[] } | null>(null);
+  const [monitorEvery, setMonitorEvery] = useState<number>(() => {
+    try { const v = Number(localStorage.getItem("wingox.monitor.every")); return INTERVALS.includes(v as never) ? v : 30; } catch { return 30; }
+  });
+  useEffect(() => { try { localStorage.setItem("wingox.monitor.every", String(monitorEvery)); } catch { /* ignore */ } }, [monitorEvery]);
   const [devicesFolded, setDevicesFolded] = useState<boolean>(() => {
     try { return localStorage.getItem("wingox.devices.folded") === "1"; } catch { return false; }
   });
@@ -140,6 +168,53 @@ export function App() {
     return () => off?.();
   }, []);
 
+  // ── reachability monitor ──────────────────────────────────────────────────
+  const watched = useMemo(
+    () => profiles.filter((p) => p.monitor).map((p) => ({ id: p.id, name: label(p), args: connArgs(p) })),
+    [profiles],
+  );
+  const reach = useMonitor(watched, monitorEvery, (e) => {
+    const key = `${e.id}-${e.at}`;
+    setToasts((list) => [...list.filter((t) => t.id !== e.id), { ...e, key }].slice(-6));
+    if (e.kind === "up") setTimeout(() => setToasts((list) => list.filter((t) => t.key !== key)), 8000);
+    void notify(e.kind === "down" ? `${e.name} is not answering` : `${e.name} is back`,
+      e.kind === "down" ? e.detail : `${e.name} ${e.detail}`);
+  });
+  async function toggleMonitor(p: Profile) {
+    try {
+      await invoke<Profile>("profile_save", { profile: { ...p, monitor: !p.monitor } });
+      await refresh();
+    } catch (e) { setFormError(String(e)); }
+  }
+  const downCount = watched.filter((w) => reach[w.id]?.status === "down").length;
+
+  // ── close every session at once ───────────────────────────────────────────
+  async function askLogoutAll() {
+    let windows: string[] = [];
+    try { windows = (await getAllWebviewWindows()).map((w) => w.label).filter((l) => l.startsWith("device-")); } catch { /* not in the shell */ }
+    setConfirmLogout({ windows });
+  }
+  async function logoutAll() {
+    setTabs([]);
+    setActive("new");
+    setConfirmLogout(null);
+    try { await emit("wingox-logout-all"); } catch { /* not in the shell */ }
+    try {
+      for (const k of Object.keys(localStorage)) if (k.startsWith("wingox.detach.")) localStorage.removeItem(k);
+    } catch { /* ignore */ }
+  }
+
+  /** the user accepted a router's certificate on first contact: pin it, save it, connect */
+  async function trustAndOpen(p: Profile, cert: CertificateInfo) {
+    setTofu(null);
+    const pinned = { ...p, pin: cert.sha256 };
+    if (pinned.id) {
+      try { await invoke<Profile>("profile_save", { profile: pinned }); await refresh(); } catch (e) { console.warn("profile_save:", e); }
+    }
+    setDraft((d) => (d.id === pinned.id && d.host === pinned.host ? { ...d, pin: cert.sha256 } : d));
+    void open(pinned);
+  }
+
   /** move a tab to its own window, to place it on another monitor */
   function detach(t: Tab) {
     const winLabel = `device-${Date.now().toString(36)}`;
@@ -160,6 +235,14 @@ export function App() {
 
   /** open (or refocus) a tab for a device and connect it */
   const open = useCallback(async (p: Profile) => {
+    if (needsPin(p)) {
+      try {
+        setTofu({ profile: p, cert: await fetchCertificate(connArgs(p)) });
+        return;
+      } catch {
+        /* unreachable etc.: the tab below shows the error of the real attempt */
+      }
+    }
     const id = p.id || `t${Date.now().toString(36)}`;
     setTabs((list) => {
       const existing = list.find((t) => t.id === id);
@@ -249,7 +332,7 @@ export function App() {
                   onClick={() => (open_ ? setActive(p.id) : void open(p))}
                   className={`grid h-7 w-7 place-items-center rounded-md transition ${
                     active === p.id ? "bg-accent/15 text-accent" : open_ ? "text-accent/80 hover:bg-panel-2" : "text-ink-faint hover:bg-panel-2 hover:text-ink"}`}>
-                  <Router size={15} />
+                  <span className="relative"><Router size={15} />{p.monitor && <ReachDot state={reach[p.id]} />}</span>
                 </button>
               );
             })}
@@ -277,14 +360,21 @@ export function App() {
                 <div key={p.id} onClick={() => (open_ ? setActive(p.id) : editProfile(p))}
                   className={`group mb-1 flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 transition ${
                     active === p.id || (active === "new" && draft.id === p.id) ? "border-accent/50 bg-accent/10" : "border-transparent hover:bg-panel-2"}`}>
-                  <Router size={15} className={open_ ? "text-accent" : "text-ink-faint"} />
+                  <span className="relative">
+                    <Router size={15} className={open_ ? "text-accent" : "text-ink-faint"} />
+                    {p.monitor && <ReachDot state={reach[p.id]} />}
+                  </span>
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-mono text-sm text-ink">{p.name}</div>
                     <div className="truncate text-[11px] text-ink-faint">
                       {p.host}:{p.port}{p.proxy ? " · proxy" : ""}
                       {isPlainHttp(p) && <span className="text-danger" title={PLAIN_HTTP_TITLE}> · HTTP unencrypted</span>}
                     </div>
+                    {p.monitor && <ReachLine state={reach[p.id]} />}
                   </div>
+                  <button type="button" title={p.monitor ? "Stop monitoring" : "Monitor reachability (ping)"}
+                    onClick={(e) => { e.stopPropagation(); void toggleMonitor(p); }}
+                    className={`h-6 w-6 place-items-center rounded hover:text-accent ${p.monitor ? "grid text-accent" : "hidden text-ink-faint group-hover:grid"}`}><Activity size={13} /></button>
                   <button type="button" title="Open" onClick={(e) => { e.stopPropagation(); void open(p); }}
                     className="hidden h-6 w-6 place-items-center rounded text-ink-faint hover:text-accent group-hover:grid"><Play size={13} /></button>
                   <button type="button" title="Delete" onClick={(e) => { e.stopPropagation(); void remove(p.id); }}
@@ -293,6 +383,7 @@ export function App() {
               );
             })}
           </div>
+          <MonitorBar watched={watched.length} down={downCount} every={monitorEvery} setEvery={setMonitorEvery} />
         </aside>
         )}
 
@@ -320,6 +411,12 @@ export function App() {
               className={`mb-1 grid h-7 w-7 place-items-center rounded-md transition ${active === "new" ? "bg-accent/20 text-accent" : "text-ink-faint hover:text-ink"}`}>
               <Plus size={14} />
             </button>
+            <div className="relative mb-1 ml-auto shrink-0">
+              <button type="button" onClick={() => void askLogoutAll()} title="Close all sessions (every device tab and detached window)"
+                className="flex h-7 items-center gap-1.5 rounded-md px-2 font-mono text-[11px] text-ink-faint transition hover:bg-danger/15 hover:text-danger">
+                <LogOut size={13} /> Close all{tabs.length ? ` (${tabs.length})` : ""}
+              </button>
+            </div>
           </nav>
 
           <div className="flex min-h-0 flex-1">
@@ -344,6 +441,105 @@ export function App() {
           </div>
         </section>
       </div>
+
+      {confirmLogout && (
+        <Modal onClose={() => setConfirmLogout(null)}>
+          <h3 className="mb-2 flex items-center gap-2 font-mono text-sm font-semibold text-ink"><LogOut size={15} className="text-danger" /> Close all sessions?</h3>
+          <p className="text-sm text-ink-dim">
+            {tabs.length || confirmLogout.windows.length
+              ? <>This closes <b className="text-ink">{tabs.length} device tab{tabs.length === 1 ? "" : "s"}</b>
+                  {confirmLogout.windows.length > 0 && <> and <b className="text-ink">{confirmLogout.windows.length} detached window{confirmLogout.windows.length === 1 ? "" : "s"}</b></>}
+                  , with their panes. Saved devices stay; the monitor keeps running.</>
+              : "There are no open sessions."}
+          </p>
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" onClick={() => setConfirmLogout(null)}
+              className="rounded-md border border-line-strong bg-panel-2 px-3 py-1.5 font-mono text-xs text-ink-dim hover:text-ink">Cancel</button>
+            <button type="button" onClick={() => void logoutAll()} autoFocus
+              className="flex items-center gap-1.5 rounded-md bg-danger px-3 py-1.5 font-mono text-xs font-semibold text-bg hover:brightness-110">
+              <LogOut size={12} /> Close all
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {tofu && (
+        <Modal onClose={() => setTofu(null)}>
+          <h3 className="mb-1 font-mono text-sm font-semibold text-ink">First connection to {label(tofu.profile)}</h3>
+          <p className="text-xs text-ink-dim">
+            Wingox has not seen this router's certificate before. Check that its fingerprint is the router's — then it is
+            pinned, and any other certificate will be refused. Nothing (no password) has been sent yet.
+          </p>
+          <CertCard cert={tofu.cert} pinned={null} trustLabel="Trust, pin and connect"
+            onTrust={() => void trustAndOpen(tofu.profile, tofu.cert)} onDismiss={() => setTofu(null)} />
+        </Modal>
+      )}
+
+      <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-80 flex-col gap-2">
+        {toasts.map((t) => (
+          <div key={t.key} role="status"
+            className={`wx-rise pointer-events-auto rounded-lg border p-3 shadow-lg backdrop-blur ${
+              t.kind === "down" ? "border-danger/60 bg-panel/95" : "border-ok/50 bg-panel/95"}`}>
+            <div className="flex items-center gap-2 font-mono text-xs font-semibold">
+              {t.kind === "down" ? <BellRing size={14} className="text-danger" /> : <CircleCheck size={14} className="text-ok" />}
+              <span className={t.kind === "down" ? "text-danger" : "text-ok"}>{t.name} {t.kind === "down" ? "is not answering" : "is back"}</span>
+              <button type="button" onClick={() => setToasts((l) => l.filter((x) => x.key !== t.key))}
+                className="ml-auto text-ink-faint hover:text-ink" title="Dismiss"><X size={12} /></button>
+            </div>
+            <p className="mt-1 line-clamp-3 break-words text-[11px] text-ink-dim">{t.detail}</p>
+            <p className="mt-0.5 font-mono text-[10px] text-ink-faint">{new Date(t.at).toLocaleTimeString()}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Modal({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-40 grid place-items-center bg-bg/70 p-4 backdrop-blur-sm" onMouseDown={onClose}>
+      <div className="wx-rise w-full max-w-md rounded-xl border border-line-strong bg-panel p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** the monitor's status dot on a device icon */
+function ReachDot({ state }: { state: ReachState | undefined }) {
+  const c = !state || state.status === "pending" ? "bg-ink-faint" : state.status === "up" ? "bg-ok" : "bg-danger";
+  return <span className={`absolute -right-1 -top-1 h-2 w-2 rounded-full ring-2 ring-panel ${c} ${state?.status === "down" ? "animate-pulse" : ""}`} />;
+}
+
+function ReachLine({ state }: { state: ReachState | undefined }) {
+  if (!state || state.status === "pending") {
+    return <div className="font-mono text-[10px] text-ink-faint">{state?.fails ? `no answer (${state.fails}/${DOWN_AFTER})…` : "checking…"}</div>;
+  }
+  if (state.status === "up") {
+    return <div className="font-mono text-[10px] text-ok" title={`up for ${ago(state.since)}`}>● {state.ms} ms{state.fails ? " · 1 lost" : ""}</div>;
+  }
+  return <div className="truncate font-mono text-[10px] text-danger" title={state.error}>● down {ago(state.since)} — {state.error}</div>;
+}
+
+function MonitorBar({ watched, down, every, setEvery }: { watched: number; down: number; every: number; setEvery: (n: number) => void }) {
+  return (
+    <div className="flex items-center gap-1.5 border-t border-line/80 px-3 py-2 font-mono text-[10.5px] text-ink-faint"
+      title="Reachability monitor: the router's web service is probed along each device's route (proxy included) without credentials — ICMP cannot cross a proxy">
+      <Activity size={12} className={down ? "text-danger" : watched ? "text-ok" : ""} />
+      {watched ? (
+        <span>{watched} watched{down ? <span className="text-danger"> · {down} down</span> : ""}</span>
+      ) : (
+        <span>monitor: none</span>
+      )}
+      <select value={every} onChange={(e) => setEvery(Number(e.target.value))} title="Probe every"
+        className="ml-auto rounded border border-line bg-panel px-1 py-0.5 text-[10.5px] text-ink-dim outline-none">
+        {INTERVALS.map((n) => <option key={n} value={n}>{n < 60 ? `${n}s` : `${n / 60}m`}</option>)}
+      </select>
     </div>
   );
 }
@@ -416,10 +612,9 @@ function ConnectionForm({ draft, setDraft, useProxy, setUseProxy, error, onConne
           </p>
         </div>
       ) : (
-        <label className="mb-3 flex cursor-pointer items-center gap-2 text-sm text-ink-dim">
-          <input type="checkbox" checked={draft.insecure} onChange={(e) => set("insecure", e.target.checked)} className="accent-amber" />
-          <ShieldAlert size={14} className="text-amber" /> Allow self-signed certificate
-        </label>
+        <CertificateSection mode={tlsModeOf(draft)} pin={draft.pin ?? ""} caPem={draft.caPem ?? ""}
+          onChange={(c) => setDraft((d) => ({ ...d, ...c }))}
+          fetchArgs={() => connArgs({ ...draft, proxy: useProxy ? draft.proxy ?? emptyProxy() : null })} />
       )}
       <label className="mb-3 flex cursor-pointer items-center gap-2 text-sm text-ink-dim">
         <input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} className="accent-accent" />
@@ -449,6 +644,12 @@ function ConnectionForm({ draft, setDraft, useProxy, setUseProxy, error, onConne
           <p className="text-[11px] text-ink-faint">Optional — leave empty if the proxy needs no login.</p>
         </div>
       )}
+
+      <label className="mb-3 flex cursor-pointer items-center gap-2 text-sm text-ink-dim"
+        title="Probe the router periodically (no credentials, along its route) and notify when it stops answering">
+        <input type="checkbox" checked={!!draft.monitor} onChange={(e) => set("monitor", e.target.checked)} className="accent-accent" />
+        <Activity size={14} className="text-accent" /> Monitor reachability (ping) and notify
+      </label>
 
       {error && <p className="mb-3 font-mono text-xs text-danger">{error}</p>}
 

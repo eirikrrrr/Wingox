@@ -5,7 +5,11 @@ mod store;
 
 use serde::{Deserialize, Serialize};
 use store::Profile;
-use wingox_core::{ConnectionConfig, ProxyConfig, ProxyKind, RestClient, Scheme, TlsMode};
+use std::time::Duration;
+
+use wingox_core::{
+    fetch_certificate, reach, CertificateInfo, ConnectionConfig, ProxyConfig, ProxyKind, RestClient, Scheme, TlsMode,
+};
 
 #[derive(Deserialize)]
 struct ProxyArgs {
@@ -27,6 +31,15 @@ struct ConnectArgs {
     username: String,
     password: String,
     insecure: bool,
+    /// "pinned" | "ca" | "verify" | "insecure"; absent on older UIs → `insecure` decides
+    #[serde(default)]
+    tls_mode: Option<String>,
+    /// SHA-256 fingerprint for "pinned"
+    #[serde(default)]
+    pin: Option<String>,
+    /// PEM for "ca"
+    #[serde(default)]
+    ca_pem: Option<String>,
     proxy: Option<ProxyArgs>,
 }
 
@@ -70,6 +83,22 @@ async fn rest_get(args: ConnectArgs, path: String) -> Result<serde_json::Value, 
     client.get(&path).await.map_err(|e| e.to_string())
 }
 
+/// Read the router's certificate (without trusting it, sending nothing else)
+/// so the user can pin it.
+#[tauri::command]
+async fn tls_fetch(args: ConnectArgs) -> Result<CertificateInfo, String> {
+    fetch_certificate(&config(args)).await.map_err(|e| e.to_string())
+}
+
+/// Reachability "ping" for the monitor: no credentials, returns milliseconds.
+#[tauri::command]
+async fn reach_device(args: ConnectArgs) -> Result<u64, String> {
+    reach(&config(args), Duration::from_secs(8))
+        .await
+        .map(|d| d.as_millis() as u64)
+        .map_err(|e| e.to_string())
+}
+
 /// the connection (TLS, optional proxy) the UI asked for
 fn config(args: ConnectArgs) -> ConnectionConfig {
     let mut cfg = ConnectionConfig::new(args.host, args.username, args.password);
@@ -77,9 +106,14 @@ fn config(args: ConnectArgs) -> ConnectionConfig {
         cfg.scheme = Scheme::Http;
     }
     cfg.port = args.port;
-    if args.insecure {
-        cfg.tls = TlsMode::AcceptInvalid;
-    }
+    cfg.tls = match args.tls_mode.as_deref() {
+        Some("pinned") => TlsMode::Pinned(args.pin.unwrap_or_default()),
+        Some("ca") => TlsMode::TrustedCa(args.ca_pem.unwrap_or_default()),
+        Some("verify") => TlsMode::Verify,
+        Some(_) => TlsMode::AcceptInvalid,
+        None if args.insecure => TlsMode::AcceptInvalid,
+        None => TlsMode::Verify,
+    };
     if let Some(p) = args.proxy {
         let kind = match p.kind.as_str() {
             "http" => ProxyKind::Http,
@@ -112,9 +146,12 @@ fn profile_delete(app: tauri::AppHandle, id: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             connect,
             rest_get,
+            tls_fetch,
+            reach_device,
             profiles_list,
             profile_save,
             profile_delete

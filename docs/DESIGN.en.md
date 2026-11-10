@@ -105,6 +105,18 @@ visual-tracert.
   proxy and the network in clear text. The UI shows a prominent warning when
   that protocol is chosen and marks the device and its tab as unencrypted; the
   real fix is assigning a certificate to `www-ssl`.
+- **Trusting the certificate** — per profile, one of: **Pinned** (default:
+  trust on first use — the SHA-256 fingerprint is shown on first contact, read
+  with a handshake that is aborted before anything is sent, and from then on only
+  that exact certificate is accepted; a change is refused loudly; it matches
+  RouterOS's `/certificate print` fingerprint), **Trusted CA** (a PEM; chain and
+  name are verified — for internal CAs), **Public CA** (the bundled public roots)
+  or **Accept any** (insecure, warned). Pinning is a custom rustls verifier that
+  still checks the handshake signatures.
+- **Reachability monitor** — profiles can be watched: their web service is probed
+  periodically along their own route (proxy included) without credentials, since
+  ICMP cannot cross a SOCKS/HTTP proxy. Two failures in a row = down → in-app
+  toast + OS notification; recovery is notified too.
 - **Binary API** — RouterOS 6 and 7. Plaintext on **8728**, TLS on **8729**
   (the `api-ssl` service). A sentence/word protocol: commands are `/`-paths
   (`/login`, `/interface/print`, `/ip/address/add`), each word length-prefixed;

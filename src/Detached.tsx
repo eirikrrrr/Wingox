@@ -2,7 +2,7 @@
 // another monitor. It keeps its pane layout, reconnects on open, and can dock
 // back: the main window takes the tab again and this window closes.
 import { useCallback, useEffect, useState } from "react";
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ArrowDownToLine, LockOpen, RefreshCw, Terminal } from "lucide-react";
 import { AmbientNetwork } from "./AmbientNetwork";
@@ -39,6 +39,16 @@ export function Detached({ winLabel }: { winLabel: string }) {
   }, [payload]);
 
   useEffect(() => { void reconnect(); }, [reconnect]);
+
+  // "Close all sessions" in the main window closes this one too
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    listen("wingox-logout-all", () => {
+      try { localStorage.removeItem(`wingox.detach.${winLabel}`); } catch { /* ignore */ }
+      void getCurrentWebviewWindow().close();
+    }).then((u) => { off = u; }).catch(() => { /* outside the desktop shell */ });
+    return () => off?.();
+  }, [winLabel]);
 
   async function dock() {
     if (!payload) return;

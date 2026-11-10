@@ -110,6 +110,18 @@ stack React/TypeScript que ya usas en visual-tracert.
   todos los datos cruzan el proxy y la red en texto plano. La UI muestra un aviso
   destacado al elegir ese protocolo y marca el dispositivo y su pestaña como sin
   cifrar; la solución real es asignar un certificado a `www-ssl`.
+- **Confiar en el certificado** — por perfil, uno de: **Pinned** (por defecto:
+  confianza en el primer uso — en el primer contacto se muestra la huella SHA-256,
+  leída con un handshake que se aborta antes de enviar nada, y desde entonces solo
+  se acepta ese certificado exacto; un cambio se rechaza con una alerta clara;
+  coincide con el `fingerprint` de `/certificate print` de RouterOS), **Trusted CA**
+  (un PEM; se verifican cadena y nombre — para CA internas), **Public CA** (las
+  raíces públicas incluidas) o **Accept any** (inseguro, con aviso). El pinning es
+  un verificador propio de rustls que sigue comprobando las firmas del handshake.
+- **Monitor de alcance** — los perfiles se pueden vigilar: se sondea su servicio
+  web periódicamente por su propia ruta (proxy incluido) sin credenciales, ya que
+  ICMP no atraviesa un proxy SOCKS/HTTP. Dos fallos seguidos = caído → aviso en la
+  app + notificación del sistema; también se avisa cuando vuelve.
 - **API binaria** — RouterOS 6 y 7. Texto plano en **8728**, TLS en **8729**
   (el servicio `api-ssl`). Un protocolo de frases/palabras: los comandos son
   rutas con `/` (`/login`, `/interface/print`, `/ip/address/add`), cada palabra

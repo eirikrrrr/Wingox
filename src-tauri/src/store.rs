@@ -39,6 +39,18 @@ pub struct Profile {
     pub password: String,
     #[serde(default)]
     pub insecure: bool,
+    /// "pinned" | "ca" | "verify" | "insecure" (empty on older profiles: `insecure` decides)
+    #[serde(default)]
+    pub tls_mode: String,
+    /// pinned SHA-256 fingerprint of the router's certificate
+    #[serde(default)]
+    pub pin: String,
+    /// trusted CA (PEM) for "ca"
+    #[serde(default)]
+    pub ca_pem: String,
+    /// watched by the reachability monitor
+    #[serde(default)]
+    pub monitor: bool,
     #[serde(default)]
     pub proxy: Option<Proxy>,
 }
