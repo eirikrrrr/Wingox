@@ -55,8 +55,28 @@ pub enum Error {
     #[error("no answer from {host}:{port} in time (timed out) — the router or the path to it is down")]
     Timeout { host: String, port: u16 },
 
+    /// the router's SSH host key has not been accepted yet
+    #[error("the router's SSH host key is not trusted yet ({algorithm} {got}): check and accept it first")]
+    HostKeyUnknown { got: String, algorithm: String },
+
+    /// the router presented an SSH host key other than the pinned one
+    #[error(
+        "the router's SSH host key CHANGED — expected {expected}, got {got}. If the router was \
+         reinstalled or its host key regenerated, accept the new key; otherwise someone may be \
+         intercepting the connection: do not continue."
+    )]
+    HostKeyMismatch { expected: String, got: String },
+
+    /// SSH password authentication was refused
+    #[error("the router refused the SSH login for user {user:?} (wrong password, or SSH not allowed for this user/address)")]
+    SshAuth { user: String },
+
+    /// any other SSH failure
+    #[error("{0}")]
+    Ssh(String),
+
     /// the proxy wants credentials (HTTP 407)
-    #[error("the proxy requires authentication (HTTP 407): set or fix the proxy user and password")]
+    #[error("the proxy requires authentication or refused the credentials: set or fix the proxy user and password")]
     ProxyAuth,
 
     /// the proxy configuration itself is invalid

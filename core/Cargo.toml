@@ -16,3 +16,6 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 ring = "0.17"
 # to show a certificate's subject/issuer/validity before the user pins it
 x509-parser = { version = "0.17", default-features = false }
+# the device terminal: SSH client (ring crypto, no aws-lc build on Windows)
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
+tokio = { version = "1", features = ["net", "io-util", "time", "sync", "rt", "macros"] }
