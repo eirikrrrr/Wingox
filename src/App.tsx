@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { WebviewWindow, getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import {
-  Server, Network, Loader2, Terminal, Moon, Sun, SquareTerminal, Flame,
+  Server, Network, Loader2, Terminal, Moon, Sun,
   User, KeyRound, Plus, Play, Trash2, Save, Router, X, ExternalLink, PanelLeftClose, PanelLeftOpen,
   LockOpen, Lock, TriangleAlert, Activity, LogOut, BellRing, CircleCheck, Pencil,
 } from "lucide-react";
@@ -70,8 +70,6 @@ export interface Tab {
 export const THEMES = [
   { id: "dark", label: "Dark", Icon: Moon },
   { id: "light", label: "Light", Icon: Sun },
-  { id: "terminal", label: "Terminal", Icon: SquareTerminal },
-  { id: "amber", label: "Amber", Icon: Flame },
 ] as const;
 export type ThemeId = (typeof THEMES)[number]["id"];
 

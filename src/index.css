@@ -63,45 +63,6 @@
   color-scheme: light;
 }
 
-/* terminal — a calm green-on-charcoal console: muted sage instead of neon,
-   charcoal instead of pure black, so long sessions stay easy on the eyes */
-:root[data-theme="terminal"] {
-  --wx-bg: #0f1412;
-  --wx-panel: #141a17;
-  --wx-panel-2: #19201c;
-  --wx-line: #252e29;
-  --wx-line-strong: #333e38;
-  --wx-ink: #c5d3ca;
-  --wx-ink-dim: #93a89b;
-  --wx-ink-faint: #64776b;
-  --wx-accent: #7dc497;
-  --wx-amber: #d6b46c;
-  --wx-danger: #df7b78;
-  --wx-ok: #86c99b;
-  --wx-info: #7fb2c6;
-  --wx-dyn: #b39bd6;
-  color-scheme: dark;
-}
-
-/* amber — warm sepia, a soft nod to amber CRTs without the glare */
-:root[data-theme="amber"] {
-  --wx-bg: #15120e;
-  --wx-panel: #1b1713;
-  --wx-panel-2: #211c17;
-  --wx-line: #2e2720;
-  --wx-line-strong: #3d342a;
-  --wx-ink: #e4d9c6;
-  --wx-ink-dim: #b2a38b;
-  --wx-ink-faint: #7c6f5c;
-  --wx-accent: #dca35c;
-  --wx-amber: #e3bf6b;
-  --wx-danger: #d9786c;
-  --wx-ok: #a8c07a;
-  --wx-info: #8eafc2;
-  --wx-dyn: #c39bcf;
-  color-scheme: dark;
-}
-
 html,
 body,
 #root {
