@@ -1,15 +1,29 @@
-# Builds the Wingox Windows app on every push to main (and on demand), so a
-# visual change can be checked by downloading the .exe from the run's artifacts.
-# Windows binaries must be built on Windows (WebView2 + MSVC), hence the runner.
+# Builds the Wingox Windows app on a push to main that touches the app (and on
+# demand), so a change can be checked by downloading the .exe from the run's
+# artifacts. Windows binaries must be built on Windows (WebView2 + MSVC).
+#
+# Not built: pushes that only touch docs/notes/dev scripts (paths-ignore), and
+# any push whose commit message contains [skip ci]. A newer push cancels a build
+# still running for an older one. Releases are built by release.yml from tags.
 name: Windows build
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "dev/**"
+      - ".github/release-notes/**"
+      - "LICENSE*"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   windows:
