@@ -15,6 +15,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 # desktop notifications (a monitored device stops answering / comes back)
 tauri-plugin-notification = "2"
+# open links (the official RouterOS docs) in the system browser
+tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wingox-core = { path = "../core" }

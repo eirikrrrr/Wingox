@@ -310,6 +310,7 @@ fn profile_delete(app: tauri::AppHandle, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(Sessions::default())
         // a closed window takes its SSH sessions with it
         .on_window_event(|window, event| {

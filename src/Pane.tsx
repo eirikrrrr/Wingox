@@ -7,7 +7,9 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   Cpu, Clock, Boxes, Network, SplitSquareHorizontal, SplitSquareVertical, X, Terminal, RefreshCw, Search, ArrowUp, ArrowDown,
+  BookOpen,
 } from "lucide-react";
+import { docsLink, openDocs } from "./docs";
 import { sectionOf, type Section } from "./menu";
 
 /** a section id from the menu (see menu.ts) */
@@ -224,6 +226,9 @@ function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onC
               </span>
             </>
           )}
+          <span className="hidden @[14rem]:contents">
+            <DocsBtn sectionId={section.id} label={group ? `${group} ${section.label}` : section.label} />
+          </span>
           <IconBtn title="Split right" onClick={() => onSplit(pane.id, "h")}><SplitSquareHorizontal size={13} /></IconBtn>
           <IconBtn title="Split down" onClick={() => onSplit(pane.id, "v")}><SplitSquareVertical size={13} /></IconBtn>
           {canClose && <IconBtn title="Close pane" onClick={() => onClose(pane.id)}><X size={13} /></IconBtn>}
@@ -239,6 +244,16 @@ function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onC
           : <div className="min-h-0 flex-1 overflow-auto p-3"><BuiltIn id={section.id} data={data} /></div>}
       </div>
     </div>
+  );
+}
+
+/** this section in MikroTik's official documentation (exact page and heading) */
+function DocsBtn({ sectionId, label }: { sectionId: string; label: string }) {
+  const { url, exact } = docsLink(sectionId, label);
+  return (
+    <IconBtn title={exact ? `Official docs: ${label}` : `Search the official docs for ${label}`} onClick={() => void openDocs(url)}>
+      <BookOpen size={12} />
+    </IconBtn>
   );
 }
 
