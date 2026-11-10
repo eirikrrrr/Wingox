@@ -113,10 +113,23 @@ visual-tracert.
   name are verified — for internal CAs), **Public CA** (the bundled public roots)
   or **Accept any** (insecure, warned). Pinning is a custom rustls verifier that
   still checks the handshake signatures.
-- **Reachability monitor** — profiles can be watched: their web service is probed
-  periodically along their own route (proxy included) without credentials, since
-  ICMP cannot cross a SOCKS/HTTP proxy. Two failures in a row = down → in-app
-  toast + OS notification; recovery is notified too.
+- **Device terminal (SSH)** — "New Terminal" opens a real RouterOS CLI
+  (xterm.js) over SSH (`russh`, ring crypto) through the profile's route:
+  direct, SOCKS5 (with auth) or HTTP CONNECT — the proxy handshakes live in
+  `core/src/net.rs`. The host key is pinned per profile by its OpenSSH
+  `SHA256:` fingerprint: first contact shows it (read before authenticating,
+  so no password goes to an unverified host), a changed key is refused loudly.
+  Each terminal pane is its own session; sessions survive pane splits/moves and
+  end with their pane, tab, window or "Close all". RouterOS probes the terminal
+  size with cursor-position queries, which xterm.js answers; for scripts the CLI
+  uses RouterOS's `+ct` login suffix.
+- **Reachability monitor** — profiles can be watched. An ICMP ping cannot cross
+  a SOCKS/HTTP proxy (they relay TCP only), so each round probes the router's TCP
+  services along its own route (proxy included), without credentials: its web
+  service, then its SSH port (the `SSH-` greeting). Either answering = up. Two
+  failed rounds in a row = down → in-app toast + OS notification; recovery is
+  notified too. If the proxy refuses every port (e.g. Squid's CONNECT ACLs), the
+  device is shown as "can't probe through this proxy" — not down, no alert.
 - **Binary API** — RouterOS 6 and 7. Plaintext on **8728**, TLS on **8729**
   (the `api-ssl` service). A sentence/word protocol: commands are `/`-paths
   (`/login`, `/interface/print`, `/ip/address/add`), each word length-prefixed;

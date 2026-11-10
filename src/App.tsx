@@ -5,7 +5,7 @@ import { WebviewWindow, getAllWebviewWindows } from "@tauri-apps/api/webviewWind
 import {
   Server, Network, Loader2, Terminal, Moon, Sun, SquareTerminal, Flame,
   User, KeyRound, Plus, Play, Trash2, Save, Router, X, ExternalLink, PanelLeftClose, PanelLeftOpen,
-  LockOpen, Lock, TriangleAlert, Activity, LogOut, BellRing, CircleCheck,
+  LockOpen, Lock, TriangleAlert, Activity, LogOut, BellRing, CircleCheck, Pencil,
 } from "lucide-react";
 import { CertCard, CertificateSection, fetchCertificate, normalizePin, tlsModeOf, type CertificateInfo, type TlsMode } from "./Certificate";
 import { DOWN_AFTER, INTERVALS, ago, notify, useMonitor, type MonitorEvent, type ReachState } from "./monitor";
@@ -43,6 +43,10 @@ export interface Profile {
   caPem?: string;
   /** watched by the reachability monitor */
   monitor?: boolean;
+  /** SSH port for the terminal (22 when missing) */
+  sshPort?: number;
+  /** pinned SSH host key fingerprint, SHA256:… */
+  sshHostKey?: string;
   proxy: Proxy | null;
 }
 
@@ -97,13 +101,13 @@ export function useTheme() {
 export const emptyProxy = (): Proxy => ({ kind: "socks5", host: "", port: 1080, username: "", password: "" });
 const blank = (): Profile => ({
   id: "", name: "", host: "", scheme: "https", port: 443, username: "admin", password: "",
-  insecure: false, tlsMode: "pinned", pin: "", caPem: "", monitor: false, proxy: null,
+  insecure: false, tlsMode: "pinned", pin: "", caPem: "", monitor: false, sshPort: 22, sshHostKey: "", proxy: null,
 });
 export const label = (p: Profile) => p.name.trim() || p.host || "device";
 
 export const connArgs = (p: Profile) => ({
   host: p.host, scheme: p.scheme ?? "https", port: p.port, username: p.username, password: p.password, insecure: p.insecure,
-  tlsMode: tlsModeOf(p), pin: normalizePin(p.pin ?? ""), caPem: p.caPem ?? "",
+  tlsMode: tlsModeOf(p), pin: normalizePin(p.pin ?? ""), caPem: p.caPem ?? "", sshPort: p.sshPort ?? 22,
   proxy: p.proxy
     ? { kind: p.proxy.kind, host: p.proxy.host, port: p.proxy.port, username: p.proxy.username || null, password: p.proxy.password || null }
     : null,
@@ -204,6 +208,15 @@ export function App() {
     } catch { /* ignore */ }
   }
 
+  /** a tab's profile changed inside its workspace (e.g. SSH host key pinned): keep and save it */
+  async function profileChanged(tabId: string, p: Profile) {
+    setTabs((list) => list.map((t) => (t.id === tabId ? { ...t, profile: p } : t)));
+    if (p.id) {
+      try { await invoke<Profile>("profile_save", { profile: p }); await refresh(); } catch (e) { console.warn("profile_save:", e); }
+    }
+    setDraft((d) => (d.id && d.id === p.id ? { ...d, sshHostKey: p.sshHostKey } : d));
+  }
+
   /** the user accepted a router's certificate on first contact: pin it, save it, connect */
   async function trustAndOpen(p: Profile, cert: CertificateInfo) {
     setTofu(null);
@@ -281,13 +294,26 @@ export function App() {
 
   const current = (): Profile => ({ ...draft, proxy: useProxy ? draft.proxy ?? emptyProxy() : null });
 
-  async function save() {
+  /** save the form; an open tab of this device takes the saved profile too */
+  async function save(): Promise<Profile | null> {
     try {
       const saved = await invoke<Profile>("profile_save", { profile: { ...current(), name: label(draft) } });
       setDraft(saved);
+      setFormError(null);
+      setTabs((list) => list.map((t) => (t.id === saved.id ? { ...t, profile: saved } : t)));
       await refresh();
-    } catch (e) { setFormError(String(e)); }
+      return saved;
+    } catch (e) { setFormError(String(e)); return null; }
   }
+  /** Connect from the form: a saved device is saved first, so what is connected
+      is always what is stored (no silent fallback to old settings later) */
+  async function connectFromForm() {
+    if (!draft.id) return void open({ ...current(), id: "" });
+    const saved = await save();
+    if (saved) void open(saved);
+  }
+  const stored = profiles.find((p) => p.id === draft.id);
+  const dirty = !!stored && JSON.stringify({ ...stored, name: label(stored) }) !== JSON.stringify({ ...current(), name: label(draft) });
   async function remove(id: string) {
     try {
       await invoke("profile_delete", { id });
@@ -372,6 +398,8 @@ export function App() {
                     </div>
                     {p.monitor && <ReachLine state={reach[p.id]} />}
                   </div>
+                  <button type="button" title="Edit device" onClick={(e) => { e.stopPropagation(); editProfile(p); }}
+                    className="hidden h-6 w-6 place-items-center rounded text-ink-faint hover:text-accent group-hover:grid"><Pencil size={12} /></button>
                   <button type="button" title={p.monitor ? "Stop monitoring" : "Monitor reachability (ping)"}
                     onClick={(e) => { e.stopPropagation(); void toggleMonitor(p); }}
                     className={`h-6 w-6 place-items-center rounded hover:text-accent ${p.monitor ? "grid text-accent" : "hidden text-ink-faint group-hover:grid"}`}><Activity size={13} /></button>
@@ -401,6 +429,14 @@ export function App() {
                     <LockOpen size={10} /> HTTP
                   </span>
                 )}
+                {t.profile.id && (
+                  <button type="button" title="Edit device" onClick={(e) => {
+                    e.stopPropagation();
+                    const saved = profiles.find((p) => p.id === t.profile.id);
+                    editProfile(saved ?? t.profile);
+                  }}
+                    className="grid h-4 w-4 place-items-center rounded text-ink-faint opacity-60 hover:text-accent hover:opacity-100"><Pencil size={10} /></button>
+                )}
                 <button type="button" title="Detach to a window" onClick={(e) => { e.stopPropagation(); detach(t); }}
                   className="grid h-4 w-4 place-items-center rounded text-ink-faint opacity-60 hover:text-accent hover:opacity-100"><ExternalLink size={11} /></button>
                 <button type="button" title="Close tab" onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
@@ -429,12 +465,14 @@ export function App() {
                 error={tab.error}
                 layout={tab.layout}
                 setLayout={(f) => setTabs((list) => list.map((t) => (t.id === tab.id ? { ...t, layout: f(t.layout) } : t)))}
+                onProfileChange={(p) => void profileChanged(tab.id, p)}
               />
             ) : (
               <div className="min-h-0 flex-1 overflow-auto p-2">
                 <ConnectionForm
                   draft={draft} setDraft={setDraft} useProxy={useProxy} setUseProxy={setUseProxy} error={formError}
-                  onConnect={() => void open({ ...current(), id: draft.id })} onSave={() => void save()}
+                  onConnect={() => void connectFromForm()} onSave={() => void save()} dirty={dirty}
+                  openTab={tabs.some((t) => t.id === draft.id)}
                 />
               </div>
             )}
@@ -512,16 +550,24 @@ function Modal({ children, onClose }: { children: ReactNode; onClose: () => void
 
 /** the monitor's status dot on a device icon */
 function ReachDot({ state }: { state: ReachState | undefined }) {
-  const c = !state || state.status === "pending" ? "bg-ink-faint" : state.status === "up" ? "bg-ok" : "bg-danger";
+  const c = !state || state.status === "pending" ? "bg-ink-faint"
+    : state.status === "up" ? "bg-ok" : state.status === "blocked" ? "bg-amber" : "bg-danger";
   return <span className={`absolute -right-1 -top-1 h-2 w-2 rounded-full ring-2 ring-panel ${c} ${state?.status === "down" ? "animate-pulse" : ""}`} />;
 }
 
 function ReachLine({ state }: { state: ReachState | undefined }) {
   if (!state || state.status === "pending") {
-    return <div className="font-mono text-[10px] text-ink-faint">{state?.fails ? `no answer (${state.fails}/${DOWN_AFTER})…` : "checking…"}</div>;
+    return <div className="truncate whitespace-nowrap font-mono text-[10px] text-ink-faint">{state?.fails ? `no answer (${state.fails}/${DOWN_AFTER})…` : "checking…"}</div>;
   }
   if (state.status === "up") {
-    return <div className="font-mono text-[10px] text-ok" title={`up for ${ago(state.since)}`}>● {state.ms} ms{state.fails ? " · 1 lost" : ""}</div>;
+    return (
+      <div className="truncate whitespace-nowrap font-mono text-[10px] text-ok" title={`up for ${ago(state.since)} — answered on ${state.via}`}>
+        ● {state.ms} ms <span className="text-ink-faint">via {state.via}</span>
+      </div>
+    );
+  }
+  if (state.status === "blocked") {
+    return <div className="truncate font-mono text-[10px] text-amber" title={state.error}>● can't probe through this proxy</div>;
   }
   return <div className="truncate font-mono text-[10px] text-danger" title={state.error}>● down {ago(state.since)} — {state.error}</div>;
 }
@@ -529,7 +575,7 @@ function ReachLine({ state }: { state: ReachState | undefined }) {
 function MonitorBar({ watched, down, every, setEvery }: { watched: number; down: number; every: number; setEvery: (n: number) => void }) {
   return (
     <div className="flex items-center gap-1.5 border-t border-line/80 px-3 py-2 font-mono text-[10.5px] text-ink-faint"
-      title="Reachability monitor: the router's web service is probed along each device's route (proxy included) without credentials — ICMP cannot cross a proxy">
+      title="Reachability monitor: each device's web service, then its SSH port, is probed along its route (proxy included) without credentials — an ICMP ping cannot cross a SOCKS/HTTP proxy">
       <Activity size={12} className={down ? "text-danger" : watched ? "text-ok" : ""} />
       {watched ? (
         <span>{watched} watched{down ? <span className="text-danger"> · {down} down</span> : ""}</span>
@@ -544,7 +590,7 @@ function MonitorBar({ watched, down, every, setEvery }: { watched: number; down:
   );
 }
 
-function ConnectionForm({ draft, setDraft, useProxy, setUseProxy, error, onConnect, onSave }: {
+function ConnectionForm({ draft, setDraft, useProxy, setUseProxy, error, onConnect, onSave, dirty, openTab }: {
   draft: Profile;
   setDraft: (f: (d: Profile) => Profile) => void;
   useProxy: boolean;
@@ -552,6 +598,10 @@ function ConnectionForm({ draft, setDraft, useProxy, setUseProxy, error, onConne
   error: string | null;
   onConnect: () => void;
   onSave: () => void;
+  /** a saved device with changes not saved yet */
+  dirty: boolean;
+  /** this device has an open tab */
+  openTab: boolean;
 }) {
   const set = <K extends keyof Profile>(k: K, v: Profile[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const scheme: Scheme = draft.scheme ?? "https";
@@ -571,10 +621,18 @@ function ConnectionForm({ draft, setDraft, useProxy, setUseProxy, error, onConne
       </h2>
       <Field label="Name"><input className={input} value={draft.name} onChange={(e) => set("name", e.target.value)} placeholder="Core router" /></Field>
       <Field label="Host"><input className={input} value={draft.host} onChange={(e) => set("host", e.target.value)} placeholder="192.168.88.1" required /></Field>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-[1fr_1fr_1.4fr] gap-3">
         <Field label="Port"><input className={input} type="number" value={draft.port} onChange={(e) => set("port", +e.target.value)} /></Field>
+        <Field label="SSH port"><input className={input} type="number" value={draft.sshPort ?? 22} onChange={(e) => set("sshPort", +e.target.value)}
+          title="For the terminal (New Terminal)" /></Field>
         <Field label="User"><input className={input} value={draft.username} onChange={(e) => set("username", e.target.value)} /></Field>
       </div>
+      {draft.sshHostKey && (
+        <p className="-mt-1.5 mb-3 flex items-center gap-1.5 truncate font-mono text-[10.5px] text-ink-faint" title={draft.sshHostKey}>
+          SSH host key pinned: <span className="truncate text-ink-dim">{draft.sshHostKey}</span>
+          <button type="button" onClick={() => set("sshHostKey", "")} className="shrink-0 text-ink-faint underline hover:text-danger">forget</button>
+        </p>
+      )}
       <Field label="Password"><input className={input} type="password" value={draft.password} onChange={(e) => set("password", e.target.value)} /></Field>
 
       <div className="mb-3">
@@ -657,13 +715,17 @@ function ConnectionForm({ draft, setDraft, useProxy, setUseProxy, error, onConne
         <button type="submit"
           className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 font-mono text-sm font-semibold text-bg transition hover:brightness-110 ${
             scheme === "http" ? "bg-danger" : "bg-accent"}`}>
-          {scheme === "http" ? <><LockOpen size={16} /> Connect unencrypted</> : <><Terminal size={16} /> Connect</>}
+          {scheme === "http" ? <LockOpen size={16} /> : <Terminal size={16} />}
+          {draft.id ? (openTab ? "Save & reconnect" : "Save & connect") : "Connect"}
+          {scheme === "http" && <span className="font-normal opacity-80">(unencrypted)</span>}
         </button>
         <button type="button" onClick={onSave} title="Save device"
-          className="flex items-center gap-2 rounded-lg border border-line-strong bg-panel-2 px-4 py-2.5 font-mono text-sm text-ink-dim transition hover:text-ink">
+          className={`flex items-center gap-2 rounded-lg border px-4 py-2.5 font-mono text-sm transition hover:text-ink ${
+            dirty ? "border-amber/60 bg-amber/10 text-amber" : "border-line-strong bg-panel-2 text-ink-dim"}`}>
           <Save size={15} /> Save
         </button>
       </div>
+      {dirty && <p className="mt-2 font-mono text-[11px] text-amber">● unsaved changes — Save, or Save &amp; connect, to keep them</p>}
       <p className="mt-3 flex items-center gap-1.5 text-[11px] text-ink-faint">
         <Loader2 size={11} /> Connect opens the device in a tab — split it into panes like tmux.
       </p>

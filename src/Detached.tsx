@@ -2,6 +2,7 @@
 // another monitor. It keeps its pane layout, reconnects on open, and can dock
 // back: the main window takes the tab again and this window closes.
 import { useCallback, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ArrowDownToLine, LockOpen, RefreshCw, Terminal } from "lucide-react";
@@ -20,6 +21,7 @@ export function Detached({ winLabel }: { winLabel: string }) {
       return null;
     }
   });
+  const [profile, setProfile] = useState(payload?.profile);
   const [layout, setLayout] = useState<Pane>(() => (payload ? normalizePane(payload.layout) : newLeaf()));
   const [data, setData] = useState<DeviceData | null>(payload?.data ?? null);
   const [busy, setBusy] = useState(false);
@@ -53,7 +55,7 @@ export function Detached({ winLabel }: { winLabel: string }) {
   async function dock() {
     if (!payload) return;
     try {
-      await emit("wingox-dock", { profile: payload.profile, layout, data } satisfies DetachPayload);
+      await emit("wingox-dock", { profile: profile ?? payload.profile, layout, data } satisfies DetachPayload);
       localStorage.removeItem(`wingox.detach.${winLabel}`);
       await getCurrentWebviewWindow().close();
     } catch (e) {
@@ -91,7 +93,11 @@ export function Detached({ winLabel }: { winLabel: string }) {
         </div>
       </header>
       <div className="flex min-h-0 flex-1">
-        <Workspace profile={payload.profile} data={data} busy={busy} error={error} layout={layout} setLayout={setLayout} />
+        <Workspace profile={profile ?? payload.profile} data={data} busy={busy} error={error} layout={layout} setLayout={setLayout}
+          onProfileChange={(p) => {
+            setProfile(p);
+            if (p.id) void invoke("profile_save", { profile: p }).catch((e) => console.warn("profile_save:", e));
+          }} />
       </div>
     </div>
   );

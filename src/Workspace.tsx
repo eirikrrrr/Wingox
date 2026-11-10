@@ -1,11 +1,13 @@
 // One device's workspace: a WinBox-style menu sidebar on the left and the
 // tmux-like pane tree on the right. A menu click opens that section in the
 // focused pane; Ctrl/⌘-click (or middle-click) opens it in a new pane beside it.
-import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ChevronRight, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
 import { MENU, type MenuItem, type Section } from "./menu";
 import { PaneTree, closePane, leaves, newLeaf, paneId, resizeSplit, setPaneView, splitPane, type DeviceData, type Pane } from "./Pane";
 import { restGet, type Profile } from "./App";
+import { SshTerminal } from "./Terminal";
 
 interface Props {
   profile: Profile;
@@ -14,9 +16,11 @@ interface Props {
   error: string | null;
   layout: Pane;
   setLayout: (f: (l: Pane) => Pane) => void;
+  /** the profile changed here (e.g. its SSH host key was pinned) */
+  onProfileChange: (p: Profile) => void;
 }
 
-export function Workspace({ profile, data, busy, error, layout, setLayout }: Props) {
+export function Workspace({ profile, data, busy, error, layout, setLayout, onProfileChange }: Props) {
   const all = leaves(layout);
   const [focused, setFocused] = useState<string | null>(all[0]?.id ?? null);
   // keep the focus on a pane that still exists
@@ -25,6 +29,24 @@ export function Workspace({ profile, data, busy, error, layout, setLayout }: Pro
   const openViews = new Set(all.map((l) => l.view));
 
   const fetcher = useCallback((path: string) => restGet(profile, path), [profile]);
+
+  // Terminals must outlive layout changes: splitting or closing a neighbour
+  // remounts the pane tree, and an SSH session must not drop because of that.
+  // Each terminal renders (via a portal) into a DOM node owned here, keyed by
+  // its pane id; the pane only lends it a slot. It ends when its pane is closed
+  // or switched to another view.
+  const nodes = useRef(new Map<string, HTMLDivElement>());
+  const terminalPanes = all.filter((l) => l.view === "terminal").map((l) => l.id);
+  const nodeFor = (id: string) => {
+    let el = nodes.current.get(id);
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "flex min-h-0 flex-1 flex-col";
+      nodes.current.set(id, el);
+    }
+    return el;
+  };
+  for (const id of [...nodes.current.keys()]) if (!terminalPanes.includes(id)) nodes.current.delete(id);
 
   function openSection(id: string, inNewPane: boolean) {
     if (!focusId) return;
@@ -54,10 +76,27 @@ export function Workspace({ profile, data, busy, error, layout, setLayout }: Pro
           onSplit={(leaf, dir) => setLayout((l) => splitPane(l, leaf, dir))}
           onClose={(leaf) => setLayout((l) => closePane(l, leaf) ?? newLeaf())}
           onResize={(split, sizes) => setLayout((l) => resizeSplit(l, split, sizes))}
+          renderTerminal={(id) => <TerminalSlot node={nodeFor(id)} />}
         />
       </div>
+      {terminalPanes.map((id) => createPortal(
+        <SshTerminal profile={profile} onPinHostKey={(key) => onProfileChange({ ...profile, sshHostKey: key })} />,
+        nodeFor(id),
+        id,
+      ))}
     </div>
   );
+}
+
+/** where a pane shows its (longer-lived) terminal */
+function TerminalSlot({ node }: { node: HTMLDivElement }) {
+  const slot = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const host = slot.current!;
+    host.appendChild(node);
+    return () => { if (node.parentNode === host) host.removeChild(node); };
+  }, [node]);
+  return <div ref={slot} className="flex min-h-0 flex-1 flex-col" />;
 }
 
 const COLLAPSE_KEY = "wingox.menu.collapsed";

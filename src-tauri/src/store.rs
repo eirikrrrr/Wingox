@@ -48,11 +48,21 @@ pub struct Profile {
     /// trusted CA (PEM) for "ca"
     #[serde(default)]
     pub ca_pem: String,
+    /// SSH port for the terminal (22 when absent)
+    #[serde(default = "ssh_port")]
+    pub ssh_port: u16,
+    /// pinned SSH host key fingerprint, `SHA256:…`
+    #[serde(default)]
+    pub ssh_host_key: String,
     /// watched by the reachability monitor
     #[serde(default)]
     pub monitor: bool,
     #[serde(default)]
     pub proxy: Option<Proxy>,
+}
+
+fn ssh_port() -> u16 {
+    22
 }
 
 fn https() -> String {

@@ -123,6 +123,8 @@ interface TreeProps {
   onClose: (leafId: string) => void;
   onResize: (splitId: string, sizes: number[]) => void;
   canClose: boolean;
+  /** the device terminal (SSH) for a "terminal" pane, by pane id */
+  renderTerminal?: (paneId: string) => ReactNode;
 }
 
 /** the smallest a pane may be dragged to, in px */
@@ -193,7 +195,7 @@ function SplitView(props: TreeProps & { split: Split }) {
   );
 }
 
-function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onClose, canClose }: TreeProps & { pane: LeafPane }) {
+function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onClose, canClose, renderTerminal }: TreeProps & { pane: LeafPane }) {
   const { section, Icon, group } = sectionOf(pane.view);
   const [reload, setReload] = useState(0);
   const [find, setFind] = useState("");
@@ -228,7 +230,9 @@ function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onC
         </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {busy ? <Centered>connecting…</Centered>
+        {/* the terminal is SSH: it does not depend on the REST connection */}
+        {section.id === "terminal" && renderTerminal ? renderTerminal(pane.id)
+          : busy ? <Centered>connecting…</Centered>
           : error ? <div className="p-3 font-mono text-sm text-danger">{error}</div>
           : !data ? <Centered>no data</Centered>
           : section.path ? <RestView key={`${section.id}:${reload}`} section={section} fetcher={fetcher} find={find} />

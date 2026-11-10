@@ -18,6 +18,8 @@ tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wingox-core = { path = "../core" }
+# the input side of each SSH session (UI → router)
+tokio = { version = "1", features = ["sync"] }
 
 [profile.release]
 codegen-units = 1

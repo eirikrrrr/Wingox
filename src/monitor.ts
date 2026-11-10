@@ -1,15 +1,22 @@
 // Reachability monitor: a constant "ping" to the profiles that ask for it, with
 // a notification when one stops answering (and when it comes back).
 //
-// ICMP cannot cross a SOCKS5/HTTP proxy — only TCP does — so the ping is an
-// unauthenticated request to the router's web service along the profile's own
-// route (proxy included): any answer from the router counts as up. No
-// credentials are sent. It runs in the main window only.
+// ICMP cannot cross a SOCKS5/HTTP proxy — only TCP does — so the "ping" probes
+// the router's TCP services along the profile's own route (proxy included):
+// its web service, then its SSH port (the `SSH-` greeting). Either answering
+// means up. No credentials are sent. When the proxy refuses every port the
+// device is "blocked" (it cannot be probed through that proxy), not down — no
+// alert for that. It runs in the main window only.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+/** what the backend's probe returns */
+interface ProbeReport { up: boolean; blocked: boolean; ms: number | null; via: string | null; detail: string | null }
+
 export interface ReachState {
-  status: "up" | "down" | "pending";
+  status: "up" | "down" | "blocked" | "pending";
+  /** what answered (e.g. "https:443", "ssh:22") */
+  via?: string;
   /** last round trip, ms */
   ms?: number;
   /** last error while down */
@@ -61,10 +68,14 @@ export function useMonitor(watched: Watched[], intervalSec: number, onEvent: (e:
     async function probe(w: Watched) {
       if (inflight.current.has(w.id)) return;
       inflight.current.add(w.id);
-      let ok = false, ms: number | undefined, error: string | undefined;
+      let ok = false, blocked = false, ms: number | undefined, error: string | undefined, via: string | undefined;
       try {
-        ms = await invoke<number>("reach_device", { args: w.args });
-        ok = true;
+        const r = await invoke<ProbeReport>("reach_device", { args: w.args });
+        ok = r.up;
+        blocked = r.blocked;
+        ms = r.ms ?? undefined;
+        via = r.via ?? undefined;
+        error = r.detail ?? undefined;
       } catch (e) {
         error = String(e);
       } finally {
@@ -74,8 +85,11 @@ export function useMonitor(watched: Watched[], intervalSec: number, onEvent: (e:
       const prev = stateRef.current[w.id];
       const now = Date.now();
       let next: ReachState;
-      if (ok) {
-        next = { status: "up", ms, fails: 0, since: prev?.status === "up" ? prev.since : now, lastCheck: now };
+      if (blocked) {
+        // not an outage: this proxy cannot probe the device — say so, do not alarm
+        next = { status: "blocked", error, fails: 0, since: prev?.status === "blocked" ? prev.since : now, lastCheck: now };
+      } else if (ok) {
+        next = { status: "up", ms, via, fails: 0, since: prev?.status === "up" ? prev.since : now, lastCheck: now };
         if (prev?.status === "down") latest.current.onEvent({ id: w.id, name: w.name, kind: "up", detail: `answers again (${ms} ms)`, at: now });
       } else {
         const fails = (prev?.fails ?? 0) + 1;

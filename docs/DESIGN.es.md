@@ -118,10 +118,25 @@ stack React/TypeScript que ya usas en visual-tracert.
   (un PEM; se verifican cadena y nombre — para CA internas), **Public CA** (las
   raíces públicas incluidas) o **Accept any** (inseguro, con aviso). El pinning es
   un verificador propio de rustls que sigue comprobando las firmas del handshake.
-- **Monitor de alcance** — los perfiles se pueden vigilar: se sondea su servicio
-  web periódicamente por su propia ruta (proxy incluido) sin credenciales, ya que
-  ICMP no atraviesa un proxy SOCKS/HTTP. Dos fallos seguidos = caído → aviso en la
-  app + notificación del sistema; también se avisa cuando vuelve.
+- **Terminal del dispositivo (SSH)** — "New Terminal" abre un CLI real de
+  RouterOS (xterm.js) por SSH (`russh`, cripto ring) por la ruta del perfil:
+  directo, SOCKS5 (con autenticación) o HTTP CONNECT — los handshakes de proxy
+  están en `core/src/net.rs`. La clave del host se fija por perfil con su huella
+  `SHA256:` de OpenSSH: el primer contacto la muestra (leída antes de
+  autenticarse, así ninguna contraseña va a un host sin verificar) y una clave
+  distinta se rechaza con una alerta clara. Cada panel de terminal es su propia
+  sesión; las sesiones sobreviven a dividir/mover paneles y terminan con su
+  panel, pestaña, ventana o "Close all". RouterOS sondea el tamaño del terminal
+  con consultas de posición del cursor, que xterm.js responde; para scripts la
+  CLI usa el sufijo de login `+ct` de RouterOS.
+- **Monitor de alcance** — los perfiles se pueden vigilar. Un ping ICMP no
+  atraviesa un proxy SOCKS/HTTP (solo transportan TCP), así que cada ronda sondea
+  los servicios TCP del router por su propia ruta (proxy incluido), sin
+  credenciales: su servicio web y después su puerto SSH (el saludo `SSH-`). Si
+  responde cualquiera = arriba. Dos rondas fallidas seguidas = caído → aviso en la
+  app + notificación del sistema; también se avisa cuando vuelve. Si el proxy
+  rechaza todos los puertos (p. ej. las ACL de CONNECT de Squid), el dispositivo
+  aparece como "no se puede sondear por este proxy" — no caído, sin alerta.
 - **API binaria** — RouterOS 6 y 7. Texto plano en **8728**, TLS en **8729**
   (el servicio `api-ssl`). Un protocolo de frases/palabras: los comandos son
   rutas con `/` (`/login`, `/interface/print`, `/ip/address/add`), cada palabra
