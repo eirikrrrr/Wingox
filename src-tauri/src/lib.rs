@@ -3,6 +3,7 @@
 
 mod settings;
 mod store;
+mod workspaces;
 
 use serde::{Deserialize, Serialize};
 use store::Profile;
@@ -293,6 +294,21 @@ fn config(args: ConnectArgs) -> ConnectionConfig {
 }
 
 #[tauri::command]
+fn workspaces_list(app: tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    workspaces::load(&app)
+}
+
+#[tauri::command]
+fn workspace_save(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<serde_json::Value, String> {
+    workspaces::upsert(&app, workspace)
+}
+
+#[tauri::command]
+fn workspace_delete(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    workspaces::delete(&app, &id)
+}
+
+#[tauri::command]
 fn settings_get(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     settings::load(&app)
 }
@@ -341,6 +357,9 @@ pub fn run() {
             ssh_close,
             settings_get,
             settings_save,
+            workspaces_list,
+            workspace_save,
+            workspace_delete,
             profiles_list,
             profile_save,
             profile_delete

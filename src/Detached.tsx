@@ -41,6 +41,14 @@ export function Detached({ winLabel }: { winLabel: string }) {
 
   useEffect(() => { void reconnect(); }, [reconnect]);
 
+  // keep the window's current state where the main window reads it (Workspaces ▸ Save)
+  useEffect(() => {
+    if (!payload) return;
+    try {
+      localStorage.setItem(`wingox.detach.${winLabel}`, JSON.stringify({ profile: profile ?? payload.profile, layout, data: null }));
+    } catch { /* ignore */ }
+  }, [winLabel, payload, profile, layout]);
+
   // "Close all sessions" in the main window closes this one too
   useEffect(() => {
     let off: (() => void) | undefined;

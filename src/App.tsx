@@ -10,8 +10,10 @@ import {
 import { CertCard, CertificateSection, fetchCertificate, normalizePin, tlsModeOf, type CertificateInfo, type TlsMode } from "./Certificate";
 import { DOWN_AFTER, ago, notify, useMonitor, type MonitorEvent, type ReachState } from "./monitor";
 import { MONITOR_INTERVALS, SettingsButton, beep, useSettings } from "./settings";
+import { WorkspacesMenu, pool, type Capture, type Workspace as SavedWorkspace, type WorkspaceWindow } from "./workspaces";
 import { AmbientNetwork } from "./AmbientNetwork";
 import { newLeaf, normalizePane, type DeviceData, type Pane } from "./Pane";
+import { Info } from "lucide-react";
 import { Workspace } from "./Workspace";
 
 export type ProxyKind = "socks5" | "http";
@@ -93,7 +95,8 @@ export const connArgs = (p: Profile) => ({
 const needsPin = (p: Profile) =>
   (p.scheme ?? "https") === "https" && tlsModeOf(p) === "pinned" && !/^[0-9a-f]{64}$/.test(normalizePin(p.pin ?? ""));
 
-interface Toast extends MonitorEvent { key: string }
+/** a monitor alert, or an informational note (kind "info": name = title) */
+type Toast = (MonitorEvent | { id: string; name: string; kind: "info"; detail: string; at: number }) & { key: string };
 
 export async function probe(p: Profile): Promise<DeviceData> {
   return invoke<DeviceData>("connect", { args: connArgs(p) });
@@ -118,7 +121,10 @@ export function App() {
   const [useProxy, setUseProxy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   /** first contact with a pinned profile: its certificate, waiting for the user's OK */
-  const [tofu, setTofu] = useState<{ profile: Profile; cert: CertificateInfo } | null>(null);
+  /** first-contact certificates waiting for the user's OK, one dialog at a time */
+  const [tofuQueue, setTofuQueue] = useState<{ profile: Profile; cert: CertificateInfo; layout?: Pane }[]>([]);
+  const tofu = tofuQueue[0] ?? null;
+  const nextTofu = () => setTofuQueue((q) => q.slice(1));
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmLogout, setConfirmLogout] = useState<{ windows: string[] } | null>(null);
   const [devicesFolded, setDevicesFolded] = useState<boolean>(() => {
@@ -200,39 +206,101 @@ export function App() {
   }
 
   /** the user accepted a router's certificate on first contact: pin it, save it, connect */
-  async function trustAndOpen(p: Profile, cert: CertificateInfo) {
-    setTofu(null);
+  async function trustAndOpen(p: Profile, cert: CertificateInfo, layout?: Pane) {
+    nextTofu();
     const pinned = { ...p, pin: cert.sha256 };
     if (pinned.id) {
       try { await invoke<Profile>("profile_save", { profile: pinned }); await refresh(); } catch (e) { console.warn("profile_save:", e); }
     }
     setDraft((d) => (d.id === pinned.id && d.host === pinned.host ? { ...d, pin: cert.sha256 } : d));
-    void open(pinned);
+    void open(pinned, { layout });
   }
 
   /** move a tab to its own window, to place it on another monitor */
-  function detach(t: Tab) {
-    const winLabel = `device-${Date.now().toString(36)}`;
-    const payload: DetachPayload = { profile: t.profile, layout: t.layout, data: t.data };
+  /** a device in its own window (to place it on another monitor); `at` restores its place */
+  function openWindow(payload: DetachPayload, at?: { x: number; y: number; width: number; height: number }) {
+    const winLabel = `device-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     try {
       localStorage.setItem(`wingox.detach.${winLabel}`, JSON.stringify(payload));
       const win = new WebviewWindow(winLabel, {
         url: `index.html?detach=${winLabel}`,
-        title: `Wingox — ${label(t.profile)}`,
-        width: 980, height: 680, minWidth: 520, minHeight: 360,
+        title: `Wingox — ${label(payload.profile)}`,
+        width: at?.width ?? 980, height: at?.height ?? 680, minWidth: 520, minHeight: 360,
+        ...(at ? { x: at.x, y: at.y } : {}),
       });
       win.once("tauri://error", (e) => console.warn("detach:", e));
-      closeTab(t.id);
+      return true;
     } catch (e) {
       console.warn("detach:", e);
+      return false;
     }
   }
+  function detach(t: Tab) {
+    if (openWindow({ profile: t.profile, layout: t.layout, data: t.data })) closeTab(t.id);
+  }
+
+  // ── saved workspaces ──────────────────────────────────────────────────────
+  const [detachedCount, setDetachedCount] = useState(0);
+  async function capture(): Promise<Capture> {
+    const saved = (p: Profile) => !!p.id && profiles.some((x) => x.id === p.id);
+    const windows: WorkspaceWindow[] = [];
+    try {
+      for (const w of await getAllWebviewWindows()) {
+        if (!w.label.startsWith("device-")) continue;
+        const raw = localStorage.getItem(`wingox.detach.${w.label}`);
+        if (!raw) continue;
+        const payload = JSON.parse(raw) as DetachPayload;
+        if (!saved(payload.profile)) continue;
+        const scale = await w.scaleFactor();
+        const pos = (await w.outerPosition()).toLogical(scale);
+        const size = (await w.innerSize()).toLogical(scale);
+        windows.push({ profileId: payload.profile.id, layout: payload.layout, x: Math.round(pos.x), y: Math.round(pos.y), width: Math.round(size.width), height: Math.round(size.height) });
+      }
+    } catch { /* outside the shell: no detached windows */ }
+    const activeTab = tabs.find((t) => t.id === active);
+    return {
+      tabs: tabs.filter((t) => saved(t.profile)).map((t) => ({ profileId: t.profile.id, layout: t.layout })),
+      windows,
+      activeProfileId: activeTab && saved(activeTab.profile) ? activeTab.profile.id : null,
+      skipped: tabs.filter((t) => !saved(t.profile)).map((t) => label(t.profile)),
+    };
+  }
+  async function restore(ws: SavedWorkspace) {
+    await logoutAll();
+    const byId = new Map(profiles.map((p) => [p.id, p]));
+    const missing = [...ws.tabs, ...ws.windows].filter((t) => !byId.has(t.profileId)).length;
+    for (const w of ws.windows) {
+      const p = byId.get(w.profileId);
+      if (p) openWindow({ profile: p, layout: normalizePane(w.layout), data: null }, w);
+    }
+    // a few at a time, so ten tabs do not open ten connections at once
+    await pool(ws.tabs.filter((t) => byId.has(t.profileId)), 3, (t) =>
+      open(byId.get(t.profileId)!, { layout: normalizePane(t.layout), focus: false }));
+    const first = ws.tabs.find((t) => byId.has(t.profileId));
+    setActive(ws.activeProfileId && byId.has(ws.activeProfileId) ? ws.activeProfileId : first?.profileId ?? "new");
+    if (missing) {
+      const at = Date.now();
+      setToasts((list) => [...list, { key: `ws-${at}`, id: `ws-${at}`, kind: "info", name: `Reopened "${ws.name}"`, at,
+        detail: `${missing} saved session${missing === 1 ? "" : "s"} skipped: the device no longer exists.` }]);
+    }
+  }
+  useEffect(() => {
+    const count = () => getAllWebviewWindows()
+      .then((ws) => setDetachedCount(ws.filter((w) => w.label.startsWith("device-")).length))
+      .catch(() => setDetachedCount(0));
+    void count();
+    const t = setInterval(count, 3000);
+    return () => clearInterval(t);
+  }, []);
 
   /** open (or refocus) a tab for a device and connect it */
-  const open = useCallback(async (p: Profile) => {
+  /** open (or refocus) a tab for a device and connect it; `layout` restores its panes */
+  const open = useCallback(async (p: Profile, opts: { layout?: Pane; focus?: boolean } = {}) => {
+    const focus = opts.focus ?? true;
     if (needsPin(p)) {
       try {
-        setTofu({ profile: p, cert: await fetchCertificate(connArgs(p)) });
+        const cert = await fetchCertificate(connArgs(p));
+        setTofuQueue((q) => [...q, { profile: p, cert, layout: opts.layout }]);
         return;
       } catch {
         /* unreachable etc.: the tab below shows the error of the real attempt */
@@ -241,10 +309,10 @@ export function App() {
     const id = p.id || `t${Date.now().toString(36)}`;
     setTabs((list) => {
       const existing = list.find((t) => t.id === id);
-      if (existing) return list.map((t) => (t.id === id ? { ...t, profile: p, busy: true, error: null } : t));
-      return [...list, { id, profile: p, data: null, busy: true, error: null, layout: newLeaf(settingsRef.current.defaultView) }];
+      if (existing) return list.map((t) => (t.id === id ? { ...t, profile: p, busy: true, error: null, layout: opts.layout ?? t.layout } : t));
+      return [...list, { id, profile: p, data: null, busy: true, error: null, layout: opts.layout ?? newLeaf(settingsRef.current.defaultView) }];
     });
-    setActive(id);
+    if (focus) setActive(id);
     try {
       const data = await probe(p);
       patchTab(id, { data, busy: false, error: null });
@@ -433,7 +501,8 @@ export function App() {
               className={`mb-1 grid h-7 w-7 place-items-center rounded-md transition ${active === "new" ? "bg-accent/20 text-accent" : "text-ink-faint hover:text-ink"}`}>
               <Plus size={14} />
             </button>
-            <div className="relative mb-1 ml-auto shrink-0">
+            <div className="relative mb-1 ml-auto flex shrink-0 items-center gap-1">
+              <WorkspacesMenu capture={capture} restore={restore} openSessions={tabs.length + detachedCount} />
               <button type="button" onClick={() => void askLogoutAll()} title="Close all sessions (every device tab and detached window)"
                 className="flex h-7 items-center gap-1.5 rounded-md px-2 font-mono text-[11px] text-ink-faint transition hover:bg-danger/15 hover:text-danger">
                 <LogOut size={13} /> Close all{tabs.length ? ` (${tabs.length})` : ""}
@@ -488,14 +557,15 @@ export function App() {
       )}
 
       {tofu && (
-        <Modal onClose={() => setTofu(null)}>
+        <Modal onClose={nextTofu}>
           <h3 className="mb-1 font-mono text-sm font-semibold text-ink">First connection to {label(tofu.profile)}</h3>
           <p className="text-xs text-ink-dim">
             Wingox has not seen this router's certificate before. Check that its fingerprint is the router's — then it is
             pinned, and any other certificate will be refused. Nothing (no password) has been sent yet.
           </p>
           <CertCard cert={tofu.cert} pinned={null} trustLabel="Trust, pin and connect"
-            onTrust={() => void trustAndOpen(tofu.profile, tofu.cert)} onDismiss={() => setTofu(null)} />
+            onTrust={() => void trustAndOpen(tofu.profile, tofu.cert, tofu.layout)} onDismiss={nextTofu} />
+          {tofuQueue.length > 1 && <p className="mt-2 text-center font-mono text-[10.5px] text-ink-faint">{tofuQueue.length - 1} more waiting</p>}
         </Modal>
       )}
 
@@ -503,10 +573,12 @@ export function App() {
         {toasts.map((t) => (
           <div key={t.key} role="status"
             className={`wx-rise pointer-events-auto rounded-lg border p-3 shadow-lg backdrop-blur ${
-              t.kind === "down" ? "border-danger/60 bg-panel/95" : "border-ok/50 bg-panel/95"}`}>
+              t.kind === "down" ? "border-danger/60 bg-panel/95" : t.kind === "info" ? "border-line-strong bg-panel/95" : "border-ok/50 bg-panel/95"}`}>
             <div className="flex items-center gap-2 font-mono text-xs font-semibold">
-              {t.kind === "down" ? <BellRing size={14} className="text-danger" /> : <CircleCheck size={14} className="text-ok" />}
-              <span className={t.kind === "down" ? "text-danger" : "text-ok"}>{t.name} {t.kind === "down" ? "is not answering" : "is back"}</span>
+              {t.kind === "down" ? <BellRing size={14} className="text-danger" /> : t.kind === "info" ? <Info size={14} className="text-accent" /> : <CircleCheck size={14} className="text-ok" />}
+              <span className={t.kind === "down" ? "text-danger" : t.kind === "info" ? "text-ink" : "text-ok"}>
+                {t.kind === "info" ? t.name : `${t.name} ${t.kind === "down" ? "is not answering" : "is back"}`}
+              </span>
               <button type="button" onClick={() => setToasts((l) => l.filter((x) => x.key !== t.key))}
                 className="ml-auto text-ink-faint hover:text-ink" title="Dismiss"><X size={12} /></button>
             </div>
