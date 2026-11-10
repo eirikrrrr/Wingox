@@ -1,7 +1,10 @@
 // A tmux-like pane tree for a device tab: a leaf is one section of the device
-// (picked from the menu sidebar); a split holds two children side by side (h)
-// or stacked (v). Panes can be split and closed, nesting freely.
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+// (picked from the menu sidebar); a split lays out its children side by side
+// (h) or stacked (v), each with a share of the space. Splitting a pane inserts
+// the new one right after it and evens out that row/column (like tmux's even
+// layouts), so every pane — not only the newest — keeps a usable size; the
+// dividers between panes can be dragged (double-click evens them out again).
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   Cpu, Clock, Boxes, Network, SplitSquareHorizontal, SplitSquareVertical, X, Terminal, RefreshCw, Search, ArrowUp, ArrowDown,
 } from "lucide-react";
@@ -10,9 +13,9 @@ import { sectionOf, type Section } from "./menu";
 /** a section id from the menu (see menu.ts) */
 export type View = string;
 
-export type Pane =
-  | { kind: "leaf"; id: string; view: View }
-  | { kind: "split"; id: string; dir: "h" | "v"; a: Pane; b: Pane };
+export type LeafPane = { kind: "leaf"; id: string; view: View };
+export type Split = { kind: "split"; id: string; dir: "h" | "v"; children: Pane[]; sizes: number[] };
+export type Pane = LeafPane | Split;
 
 export interface DeviceData {
   identity: string;
@@ -34,31 +37,78 @@ export const paneId = uid;
 
 export const newLeaf = (view: View = "overview"): Pane => ({ kind: "leaf", id: uid(), view });
 
-/** split a leaf in two; the new half shows `view` (or the same view), with id `newId` if given */
+const even = (n: number) => Array.from({ length: n }, () => 1 / n);
+
+/**
+ * Split a leaf; the new pane shows `view` (or the same view) and gets id `newId`
+ * if given. In the same direction as its parent split, the new pane joins that
+ * split right after the leaf and the row/column is evened out; otherwise the
+ * leaf becomes a two-pane split.
+ */
 export function splitPane(tree: Pane, leafId: string, dir: "h" | "v", view?: View, newId?: string): Pane {
+  const fresh = (from: LeafPane): LeafPane => ({ kind: "leaf", id: newId ?? uid(), view: view ?? from.view });
   if (tree.kind === "leaf") {
     if (tree.id !== leafId) return tree;
-    return { kind: "split", id: uid(), dir, a: tree, b: { kind: "leaf", id: newId ?? uid(), view: view ?? tree.view } };
+    return { kind: "split", id: uid(), dir, children: [tree, fresh(tree)], sizes: [0.5, 0.5] };
   }
-  return { ...tree, a: splitPane(tree.a, leafId, dir, view, newId), b: splitPane(tree.b, leafId, dir, view, newId) };
+  const at = tree.children.findIndex((c) => c.kind === "leaf" && c.id === leafId);
+  if (at >= 0 && tree.dir === dir) {
+    const children = [...tree.children];
+    children.splice(at + 1, 0, fresh(tree.children[at] as LeafPane));
+    return { ...tree, children, sizes: even(children.length) };
+  }
+  return { ...tree, children: tree.children.map((c) => splitPane(c, leafId, dir, view, newId)) };
 }
 
+/** close a leaf; its space goes to its neighbours, and a split left with one child collapses */
 export function closePane(tree: Pane, leafId: string): Pane | null {
   if (tree.kind === "leaf") return tree.id === leafId ? null : tree;
-  const a = closePane(tree.a, leafId);
-  const b = closePane(tree.b, leafId);
-  if (a === null) return b;
-  if (b === null) return a;
-  return { ...tree, a, b };
+  const children: Pane[] = [];
+  const sizes: number[] = [];
+  tree.children.forEach((c, i) => {
+    const next = closePane(c, leafId);
+    if (next) { children.push(next); sizes.push(tree.sizes[i] ?? 0); }
+  });
+  if (children.length === 0) return null;
+  if (children.length === 1) return children[0];
+  const total = sizes.reduce((a, b) => a + b, 0) || 1;
+  return { ...tree, children, sizes: sizes.map((x) => x / total) };
 }
 
 export function setPaneView(tree: Pane, leafId: string, view: View): Pane {
   if (tree.kind === "leaf") return tree.id === leafId ? { ...tree, view } : tree;
-  return { ...tree, a: setPaneView(tree.a, leafId, view), b: setPaneView(tree.b, leafId, view) };
+  return { ...tree, children: tree.children.map((c) => setPaneView(c, leafId, view)) };
 }
 
-export function leaves(tree: Pane): Extract<Pane, { kind: "leaf" }>[] {
-  return tree.kind === "leaf" ? [tree] : [...leaves(tree.a), ...leaves(tree.b)];
+/** new sizes for one split (after dragging a divider or evening it out) */
+export function resizeSplit(tree: Pane, splitId: string, sizes: number[]): Pane {
+  if (tree.kind === "leaf") return tree;
+  if (tree.id === splitId) return { ...tree, sizes };
+  return { ...tree, children: tree.children.map((c) => resizeSplit(c, splitId, sizes)) };
+}
+
+export function leaves(tree: Pane): LeafPane[] {
+  return tree.kind === "leaf" ? [tree] : tree.children.flatMap(leaves);
+}
+
+/**
+ * A layout from storage or another window, possibly in the older binary shape
+ * (`{ a, b }` splits): turned into the current one, flattening a split nested
+ * in the same direction.
+ */
+export function normalizePane(raw: unknown): Pane {
+  const p = raw as Record<string, unknown> | null;
+  if (!p || typeof p !== "object") return newLeaf();
+  if (p.kind === "leaf") return { kind: "leaf", id: String(p.id ?? uid()), view: String(p.view ?? "overview") };
+  const dir = p.dir === "v" ? "v" : "h";
+  const kids = Array.isArray(p.children) ? (p.children as unknown[]) : [p.a, p.b].filter(Boolean);
+  if (kids.length === 0) return newLeaf();
+  const children = kids.map(normalizePane);
+  if (children.length === 1) return children[0];
+  const sizes = Array.isArray(p.sizes) && p.sizes.length === children.length && p.sizes.every((x) => typeof x === "number" && x > 0)
+    ? (p.sizes as number[])
+    : even(children.length);
+  return { kind: "split", id: String(p.id ?? uid()), dir, children, sizes };
 }
 
 interface TreeProps {
@@ -71,23 +121,79 @@ interface TreeProps {
   onFocus: (leafId: string) => void;
   onSplit: (leafId: string, dir: "h" | "v") => void;
   onClose: (leafId: string) => void;
+  onResize: (splitId: string, sizes: number[]) => void;
   canClose: boolean;
 }
 
+/** the smallest a pane may be dragged to, in px */
+const MIN_PANE = { h: 160, v: 90 };
+
 export function PaneTree(props: TreeProps) {
   const { pane } = props;
-  if (pane.kind === "split") {
-    return (
-      <div className={`flex min-h-0 min-w-0 flex-1 gap-1.5 ${pane.dir === "h" ? "flex-row" : "flex-col"}`}>
-        <PaneTree {...props} pane={pane.a} />
-        <PaneTree {...props} pane={pane.b} />
-      </div>
-    );
-  }
+  if (pane.kind === "split") return <SplitView {...props} split={pane} />;
   return <Leaf {...props} pane={pane} />;
 }
 
-function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onClose, canClose }: TreeProps & { pane: Extract<Pane, { kind: "leaf" }> }) {
+function SplitView(props: TreeProps & { split: Split }) {
+  const { split, onResize } = props;
+  const box = useRef<HTMLDivElement>(null);
+  const horizontal = split.dir === "h";
+
+  /** drag the divider between child i and i+1 */
+  function startDrag(i: number, e: ReactPointerEvent<HTMLDivElement>) {
+    const el = box.current;
+    if (!el) return;
+    e.preventDefault();
+    const rect = el.getBoundingClientRect();
+    const length = horizontal ? rect.width : rect.height;
+    const start = horizontal ? e.clientX : e.clientY;
+    const base = [...split.sizes];
+    const pair = base[i] + base[i + 1];
+    const min = Math.min(MIN_PANE[split.dir] / length, pair / 2);
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+    document.body.style.cursor = horizontal ? "col-resize" : "row-resize";
+    const move = (ev: PointerEvent) => {
+      const delta = ((horizontal ? ev.clientX : ev.clientY) - start) / length;
+      const first = Math.min(Math.max(base[i] + delta, min), pair - min);
+      const next = [...base];
+      next[i] = first;
+      next[i + 1] = pair - first;
+      onResize(split.id, next);
+    };
+    const up = () => {
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", up);
+      target.removeEventListener("pointercancel", up);
+      document.body.style.cursor = "";
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", up);
+    target.addEventListener("pointercancel", up);
+  }
+
+  return (
+    <div ref={box} className={`flex min-h-0 min-w-0 flex-1 ${horizontal ? "flex-row" : "flex-col"}`}>
+      {split.children.map((child, i) => (
+        <div key={child.id} className={`flex min-h-0 min-w-0 ${horizontal ? "flex-row" : "flex-col"}`}
+          style={{ flex: `${split.sizes[i] ?? 1 / split.children.length} 1 0%` }}>
+          {i > 0 && (
+            <div role="separator" aria-orientation={horizontal ? "vertical" : "horizontal"}
+              title="Drag to resize · double-click to even out"
+              onPointerDown={(e) => startDrag(i - 1, e)}
+              onDoubleClick={() => onResize(split.id, even(split.children.length))}
+              className={`group flex shrink-0 items-center justify-center ${horizontal ? "w-1.5 cursor-col-resize" : "h-1.5 cursor-row-resize"}`}>
+              <span className={`rounded-full bg-line transition-colors group-hover:bg-accent/70 ${horizontal ? "h-8 w-0.5" : "h-0.5 w-8"}`} />
+            </div>
+          )}
+          <PaneTree {...props} pane={child} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onClose, canClose }: TreeProps & { pane: LeafPane }) {
   const { section, Icon, group } = sectionOf(pane.view);
   const [reload, setReload] = useState(0);
   const [find, setFind] = useState("");
@@ -97,8 +203,8 @@ function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onC
     <div onMouseDown={() => onFocus(pane.id)}
       className={`@container flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-panel/80 transition-colors ${
         isFocused ? "border-accent/60" : "border-line"}`}>
-      <div className="flex items-center gap-1.5 border-b border-line bg-panel-2/60 px-2 py-1">
-        <Icon size={13} className={`shrink-0 ${isFocused ? "text-accent" : "text-ink-faint"}`} />
+      <div className="flex items-center gap-1.5 border-b border-line bg-panel-2/60 px-1.5 py-1">
+        <Icon size={13} className={`hidden shrink-0 @[9rem]:block ${isFocused ? "text-accent" : "text-ink-faint"}`} />
         <span className="min-w-0 truncate font-mono text-[11px] text-ink">
           {group && <span className="hidden text-ink-faint @[26rem]:inline">{group} ▸ </span>}{section.label}
         </span>
@@ -111,7 +217,9 @@ function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onC
                 <input value={find} onChange={(e) => setFind(e.target.value)} placeholder="Find"
                   className="w-20 bg-transparent py-0.5 font-mono text-[11px] text-ink outline-none placeholder:text-ink-faint" />
               </div>
-              <IconBtn title="Refresh" onClick={() => setReload((n) => n + 1)}><RefreshCw size={12} /></IconBtn>
+              <span className="hidden @[12rem]:contents">
+                <IconBtn title="Refresh" onClick={() => setReload((n) => n + 1)}><RefreshCw size={12} /></IconBtn>
+              </span>
             </>
           )}
           <IconBtn title="Split right" onClick={() => onSplit(pane.id, "h")}><SplitSquareHorizontal size={13} /></IconBtn>

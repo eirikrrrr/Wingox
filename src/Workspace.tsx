@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { ChevronRight, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
 import { MENU, type MenuItem, type Section } from "./menu";
-import { PaneTree, closePane, leaves, newLeaf, paneId, setPaneView, splitPane, type DeviceData, type Pane } from "./Pane";
+import { PaneTree, closePane, leaves, newLeaf, paneId, resizeSplit, setPaneView, splitPane, type DeviceData, type Pane } from "./Pane";
 import { restGet, type Profile } from "./App";
 
 interface Props {
@@ -53,6 +53,7 @@ export function Workspace({ profile, data, busy, error, layout, setLayout }: Pro
           canClose={layout.kind === "split"}
           onSplit={(leaf, dir) => setLayout((l) => splitPane(l, leaf, dir))}
           onClose={(leaf) => setLayout((l) => closePane(l, leaf) ?? newLeaf())}
+          onResize={(split, sizes) => setLayout((l) => resizeSplit(l, split, sizes))}
         />
       </div>
     </div>
