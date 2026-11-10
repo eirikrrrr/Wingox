@@ -5,12 +5,21 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   Server, ShieldAlert, Network, Loader2, Terminal, Moon, Sun, SquareTerminal, Flame,
   User, KeyRound, Plus, Play, Trash2, Save, Router, X, ExternalLink, PanelLeftClose, PanelLeftOpen,
+  LockOpen, Lock, TriangleAlert,
 } from "lucide-react";
 import { AmbientNetwork } from "./AmbientNetwork";
-import { newLeaf, type DeviceData, type Pane } from "./Pane";
+import { newLeaf, normalizePane, type DeviceData, type Pane } from "./Pane";
 import { Workspace } from "./Workspace";
 
 export type ProxyKind = "socks5" | "http";
+
+/** which RouterOS web service carries REST: www-ssl (HTTPS) or www (plain HTTP, unencrypted) */
+export type Scheme = "https" | "http";
+export const DEFAULT_PORT: Record<Scheme, number> = { https: 443, http: 80 };
+/** profiles saved before the protocol choice existed are HTTPS */
+export const isPlainHttp = (p: { scheme?: Scheme }) => p.scheme === "http";
+export const PLAIN_HTTP_TITLE =
+  "Unencrypted HTTP: the RouterOS user, password and all data travel in clear text (readable by the proxy and every network hop)";
 
 export interface Proxy { kind: ProxyKind; host: string; port: number; username: string; password: string }
 
@@ -18,6 +27,8 @@ export interface Profile {
   id: string;
   name: string;
   host: string;
+  /** missing on profiles saved before the protocol choice: means https */
+  scheme?: Scheme;
   port: number;
   username: string;
   password: string;
@@ -74,11 +85,11 @@ export function useTheme() {
 }
 
 export const emptyProxy = (): Proxy => ({ kind: "socks5", host: "", port: 1080, username: "", password: "" });
-const blank = (): Profile => ({ id: "", name: "", host: "", port: 443, username: "admin", password: "", insecure: true, proxy: null });
+const blank = (): Profile => ({ id: "", name: "", host: "", scheme: "https", port: 443, username: "admin", password: "", insecure: true, proxy: null });
 export const label = (p: Profile) => p.name.trim() || p.host || "device";
 
 const connArgs = (p: Profile) => ({
-  host: p.host, port: p.port, username: p.username, password: p.password, insecure: p.insecure,
+  host: p.host, scheme: p.scheme ?? "https", port: p.port, username: p.username, password: p.password, insecure: p.insecure,
   proxy: p.proxy
     ? { kind: p.proxy.kind, host: p.proxy.host, port: p.proxy.port, username: p.proxy.username || null, password: p.proxy.password || null }
     : null,
@@ -123,7 +134,7 @@ export function App() {
     listen<DetachPayload>("wingox-dock", ({ payload }) => {
       const id = payload.profile.id || `t${Date.now().toString(36)}`;
       setTabs((list) => [...list.filter((t) => t.id !== id),
-        { id, profile: payload.profile, data: payload.data, busy: false, error: null, layout: payload.layout }]);
+        { id, profile: payload.profile, data: payload.data, busy: false, error: null, layout: normalizePane(payload.layout) }]);
       setActive(id);
     }).then((u) => { off = u; }).catch(() => { /* outside the desktop shell */ });
     return () => off?.();
@@ -234,7 +245,7 @@ export function App() {
             {profiles.map((p) => {
               const open_ = tabs.some((t) => t.id === p.id);
               return (
-                <button key={p.id} type="button" title={`${p.name} — ${p.host}:${p.port}`}
+                <button key={p.id} type="button" title={`${p.name} — ${p.host}:${p.port}${isPlainHttp(p) ? " — UNENCRYPTED HTTP" : ""}`}
                   onClick={() => (open_ ? setActive(p.id) : void open(p))}
                   className={`grid h-7 w-7 place-items-center rounded-md transition ${
                     active === p.id ? "bg-accent/15 text-accent" : open_ ? "text-accent/80 hover:bg-panel-2" : "text-ink-faint hover:bg-panel-2 hover:text-ink"}`}>
@@ -269,7 +280,10 @@ export function App() {
                   <Router size={15} className={open_ ? "text-accent" : "text-ink-faint"} />
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-mono text-sm text-ink">{p.name}</div>
-                    <div className="truncate text-[11px] text-ink-faint">{p.host}:{p.port}{p.proxy ? " · proxy" : ""}</div>
+                    <div className="truncate text-[11px] text-ink-faint">
+                      {p.host}:{p.port}{p.proxy ? " · proxy" : ""}
+                      {isPlainHttp(p) && <span className="text-danger" title={PLAIN_HTTP_TITLE}> · HTTP unencrypted</span>}
+                    </div>
                   </div>
                   <button type="button" title="Open" onClick={(e) => { e.stopPropagation(); void open(p); }}
                     className="hidden h-6 w-6 place-items-center rounded text-ink-faint hover:text-accent group-hover:grid"><Play size={13} /></button>
@@ -291,6 +305,11 @@ export function App() {
                   active === t.id ? "border-line bg-panel text-ink" : "border-transparent text-ink-faint hover:text-ink"}`}>
                 <span className={`h-1.5 w-1.5 rounded-full ${t.error ? "bg-danger" : t.busy ? "bg-amber" : "bg-accent"}`} />
                 <span className="max-w-40 truncate">{label(t.profile)}</span>
+                {isPlainHttp(t.profile) && (
+                  <span title={PLAIN_HTTP_TITLE} className="flex items-center gap-0.5 rounded bg-danger/15 px-1 text-[10px] text-danger">
+                    <LockOpen size={10} /> HTTP
+                  </span>
+                )}
                 <button type="button" title="Detach to a window" onClick={(e) => { e.stopPropagation(); detach(t); }}
                   className="grid h-4 w-4 place-items-center rounded text-ink-faint opacity-60 hover:text-accent hover:opacity-100"><ExternalLink size={11} /></button>
                 <button type="button" title="Close tab" onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
@@ -339,6 +358,12 @@ function ConnectionForm({ draft, setDraft, useProxy, setUseProxy, error, onConne
   onSave: () => void;
 }) {
   const set = <K extends keyof Profile>(k: K, v: Profile[K]) => setDraft((d) => ({ ...d, [k]: v }));
+  const scheme: Scheme = draft.scheme ?? "https";
+  // switching protocol moves the port along when it is still the other one's default
+  const setScheme = (sc: Scheme) => setDraft((d) => {
+    const from: Scheme = d.scheme ?? "https";
+    return { ...d, scheme: sc, port: d.port === DEFAULT_PORT[from] ? DEFAULT_PORT[sc] : d.port };
+  });
   const proxy = draft.proxy ?? emptyProxy();
   const setProxy = <K extends keyof Proxy>(k: K, v: Proxy[K]) => setDraft((d) => ({ ...d, proxy: { ...(d.proxy ?? emptyProxy()), [k]: v } }));
   const submit = (e: FormEvent) => { e.preventDefault(); onConnect(); };
@@ -356,10 +381,46 @@ function ConnectionForm({ draft, setDraft, useProxy, setUseProxy, error, onConne
       </div>
       <Field label="Password"><input className={input} type="password" value={draft.password} onChange={(e) => set("password", e.target.value)} /></Field>
 
-      <label className="mb-3 flex cursor-pointer items-center gap-2 text-sm text-ink-dim">
-        <input type="checkbox" checked={draft.insecure} onChange={(e) => set("insecure", e.target.checked)} className="accent-amber" />
-        <ShieldAlert size={14} className="text-amber" /> Allow self-signed certificate
-      </label>
+      <div className="mb-3">
+        <span className="mb-1 block font-mono text-xs text-ink-faint">Protocol</span>
+        <div className="grid grid-cols-2 gap-1 rounded-lg border border-line-strong bg-panel-2 p-1">
+          {(["https", "http"] as const).map((sc) => {
+            const on = scheme === sc;
+            const Icon = sc === "https" ? Lock : LockOpen;
+            return (
+              <button key={sc} type="button" onClick={() => setScheme(sc)}
+                className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 font-mono text-xs transition ${
+                  on ? (sc === "https" ? "bg-accent/20 text-accent" : "bg-danger/20 text-danger") : "text-ink-faint hover:text-ink"}`}>
+                <Icon size={13} /> {sc === "https" ? "HTTPS · www-ssl" : "HTTP · unencrypted"}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {scheme === "http" ? (
+        <div role="alert" className="wx-rise mb-3 rounded-lg border border-danger/60 bg-danger/10 p-3 text-xs leading-relaxed text-ink">
+          <div className="mb-1 flex items-center gap-1.5 font-mono font-semibold text-danger">
+            <TriangleAlert size={14} /> Unencrypted connection — not secure
+          </div>
+          <p>
+            With HTTP <b>nothing is encrypted</b>: the RouterOS <b>username and password</b> (sent with every request) and all
+            the configuration you read travel in <b>clear text</b>. The proxy and anyone on the network path between Wingox and
+            the router can read and reuse them.
+          </p>
+          <p className="mt-1.5 text-ink-dim">
+            Use it only when the router's <span className="font-mono">www-ssl</span> service cannot be used — typically it has
+            no certificate (<span className="font-mono">certificate=none</span>), so HTTPS fails with a TLS handshake error.
+            The real fix is on the router: assign a certificate to <span className="font-mono">www-ssl</span> and switch back to HTTPS.
+            The router's <span className="font-mono">www</span> service (port 80) must be enabled.
+          </p>
+        </div>
+      ) : (
+        <label className="mb-3 flex cursor-pointer items-center gap-2 text-sm text-ink-dim">
+          <input type="checkbox" checked={draft.insecure} onChange={(e) => set("insecure", e.target.checked)} className="accent-amber" />
+          <ShieldAlert size={14} className="text-amber" /> Allow self-signed certificate
+        </label>
+      )}
       <label className="mb-3 flex cursor-pointer items-center gap-2 text-sm text-ink-dim">
         <input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} className="accent-accent" />
         <Network size={14} className="text-accent" /> Reach it through a proxy
@@ -393,8 +454,9 @@ function ConnectionForm({ draft, setDraft, useProxy, setUseProxy, error, onConne
 
       <div className="mt-1 flex gap-2">
         <button type="submit"
-          className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 font-mono text-sm font-semibold text-bg transition hover:brightness-110">
-          <Terminal size={16} /> Connect
+          className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 font-mono text-sm font-semibold text-bg transition hover:brightness-110 ${
+            scheme === "http" ? "bg-danger" : "bg-accent"}`}>
+          {scheme === "http" ? <><LockOpen size={16} /> Connect unencrypted</> : <><Terminal size={16} /> Connect</>}
         </button>
         <button type="button" onClick={onSave} title="Save device"
           className="flex items-center gap-2 rounded-lg border border-line-strong bg-panel-2 px-4 py-2.5 font-mono text-sm text-ink-dim transition hover:text-ink">

@@ -30,6 +30,9 @@ pub struct Profile {
     pub id: String,
     pub name: String,
     pub host: String,
+    /// "https" or "http" (unencrypted); profiles saved before this field are https
+    #[serde(default = "https")]
+    pub scheme: String,
     pub port: u16,
     pub username: String,
     #[serde(default)]
@@ -38,6 +41,10 @@ pub struct Profile {
     pub insecure: bool,
     #[serde(default)]
     pub proxy: Option<Proxy>,
+}
+
+fn https() -> String {
+    "https".into()
 }
 
 fn file(app: &AppHandle) -> Result<PathBuf, String> {

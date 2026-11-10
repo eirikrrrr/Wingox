@@ -5,15 +5,19 @@
 //! idea (proxy connectivity) here on the Pi, before any UI.
 //!
 //! Usage:
-//!   wingox <host> <user> <password> [--port 443] [--insecure] [--proxy <url>]
+//!   wingox <host> <user> <password> [--port 443] [--insecure] [--http] [--proxy <url>]
+//!
+//! --http talks to the router's plain-HTTP `www` service (port 80) instead of
+//! `www-ssl`: NOTHING is encrypted, the RouterOS password travels in clear text.
+//! Only for routers whose www-ssl has no certificate.
 //!
 //! <url> is socks5://[user:pass@]host:port or http://[user:pass@]host:port.
 //! Values may also come from env: WINGOX_HOST, WINGOX_USER, WINGOX_PASS,
-//! WINGOX_PORT, WINGOX_INSECURE, WINGOX_PROXY.
+//! WINGOX_PORT, WINGOX_INSECURE, WINGOX_HTTP, WINGOX_PROXY.
 
 use std::env;
 
-use wingox_core::{ConnectionConfig, ProxyConfig, ProxyKind, RestClient, TlsMode};
+use wingox_core::{ConnectionConfig, ProxyConfig, ProxyKind, RestClient, Scheme, TlsMode};
 
 #[tokio::main]
 async fn main() {
@@ -27,7 +31,14 @@ async fn run() -> Result<(), String> {
     let args = Args::parse()?;
 
     let mut cfg = ConnectionConfig::new(args.host, args.user, args.pass);
-    cfg.port = args.port;
+    if args.http {
+        cfg.scheme = Scheme::Http;
+        eprintln!(
+            "WARNING: plain HTTP — the RouterOS user and password and all data travel UNENCRYPTED \
+             (readable by the proxy and every network hop)."
+        );
+    }
+    cfg.port = args.port.unwrap_or(cfg.scheme.default_port());
     if args.insecure {
         cfg.tls = TlsMode::AcceptInvalid;
     }
@@ -39,7 +50,7 @@ async fn run() -> Result<(), String> {
         Some(p) => format!("via {:?} {}:{}", p.kind, p.host, p.port),
         None => "directly".to_string(),
     };
-    eprintln!("connecting to {}:{} {via}…", cfg.host, cfg.port);
+    eprintln!("connecting to {}://{}:{} {via}…", cfg.scheme.as_str(), cfg.host, cfg.port);
 
     let client = RestClient::connect(&cfg).map_err(|e| e.to_string())?;
     let identity = client.identity().await.map_err(|e| e.to_string())?;
@@ -77,8 +88,9 @@ struct Args {
     host: String,
     user: String,
     pass: String,
-    port: u16,
+    port: Option<u16>,
     insecure: bool,
+    http: bool,
     proxy: Option<String>,
 }
 
@@ -87,12 +99,14 @@ impl Args {
         let mut positional = Vec::new();
         let mut port: Option<u16> = None;
         let mut insecure = false;
+        let mut http = false;
         let mut proxy: Option<String> = None;
 
         let mut it = env::args().skip(1);
         while let Some(arg) = it.next() {
             match arg.as_str() {
                 "--insecure" | "-k" => insecure = true,
+                "--http" => http = true,
                 "--port" => port = Some(next(&mut it, "--port")?.parse().map_err(|_| "bad --port")?),
                 "--proxy" => proxy = Some(next(&mut it, "--proxy")?),
                 "-h" | "--help" => return Err(USAGE.to_string()),
@@ -114,13 +128,17 @@ impl Args {
         if !insecure {
             insecure = env_opt("WINGOX_INSECURE").is_some();
         }
+        if !http {
+            http = env_opt("WINGOX_HTTP").is_some();
+        }
 
         Ok(Args {
             host: host.ok_or_else(|| format!("missing host\n{USAGE}"))?,
             user: user.ok_or_else(|| format!("missing user\n{USAGE}"))?,
             pass: pass.ok_or_else(|| format!("missing password\n{USAGE}"))?,
-            port: port.unwrap_or(443),
+            port,
             insecure,
+            http,
             proxy,
         })
     }
@@ -154,4 +172,4 @@ fn parse_proxy(url: &str) -> Result<ProxyConfig, String> {
 }
 
 const USAGE: &str =
-    "usage: wingox <host> <user> <password> [--port 443] [--insecure] [--proxy socks5://host:port]";
+    "usage: wingox <host> <user> <password> [--port 443] [--insecure] [--http] [--proxy socks5://host:port]";

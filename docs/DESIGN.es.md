@@ -102,7 +102,14 @@ stack React/TypeScript que ya usas en visual-tracert.
   CRUD mapea al árbol de configuración, p. ej. `GET /rest/system/resource`,
   `GET /rest/interface`, `PATCH /rest/ip/address/<id>`, `PUT /rest/ip/address`,
   `POST .../add`, `DELETE`. Requiere `www-ssl` activado con un certificado en el
-  router.
+  router. Un `www-ssl` con `certificate=none` solo ofrece cifrados anónimos (ADH),
+  que ningún cliente TLS moderno acepta: el handshake falla con la alerta
+  `handshake_failure`, y Wingox lo indica explícitamente. Para esos routers un
+  perfil puede elegir **Protocolo = HTTP** (el servicio `www`, puerto 80): el REST
+  funciona igual, pero nada va cifrado — el usuario/contraseña de Basic auth y
+  todos los datos cruzan el proxy y la red en texto plano. La UI muestra un aviso
+  destacado al elegir ese protocolo y marca el dispositivo y su pestaña como sin
+  cifrar; la solución real es asignar un certificado a `www-ssl`.
 - **API binaria** — RouterOS 6 y 7. Texto plano en **8728**, TLS en **8729**
   (el servicio `api-ssl`). Un protocolo de frases/palabras: los comandos son
   rutas con `/` (`/login`, `/interface/print`, `/ip/address/add`), cada palabra

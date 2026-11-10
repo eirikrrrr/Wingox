@@ -10,5 +10,5 @@ pub mod transport;
 
 pub use error::{Error, Result};
 pub use routeros::rest::RestClient;
-pub use routeros::ConnectionConfig;
+pub use routeros::{ConnectionConfig, Scheme};
 pub use transport::{ProxyConfig, ProxyKind, TlsMode};

@@ -30,7 +30,9 @@ npm run tauri build    # build installers for the current OS
 ```
 
 The Rust core and the headless CLI (no GUI, for testing) live in `core/` and
-`cli/`: `cargo run -p wingox-cli -- <host> <user> <pass> [--insecure] [--proxy socks5://host:port]`.
+`cli/`: `cargo run -p wingox-cli -- <host> <user> <pass> [--insecure] [--http] [--proxy socks5://host:port]`.
+`--http` uses the router's plain-HTTP `www` service for routers whose `www-ssl`
+has no certificate — **unencrypted**: the RouterOS password travels in clear text.
 
 ## Windows builds
 

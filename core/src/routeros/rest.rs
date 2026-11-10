@@ -1,4 +1,5 @@
-//! The RouterOS 7 REST client: HTTPS to `/rest`, HTTP Basic auth, JSON. The
+//! The RouterOS 7 REST client: HTTPS (or, when the user explicitly chooses
+//! it, plain HTTP) to `/rest`, HTTP Basic auth, JSON. The
 //! reqwest client is built once with the connection's proxy and TLS settings,
 //! so every request goes through the same route to the device.
 
@@ -6,13 +7,15 @@ use reqwest::Client;
 use std::time::Duration;
 
 use super::model::{Identity, SystemResource};
-use super::ConnectionConfig;
+use super::{ConnectionConfig, Scheme};
 use crate::error::{Error, Result};
 use crate::transport::TlsMode;
 
 pub struct RestClient {
     http: Client,
     base: String,
+    host: String,
+    port: u16,
     username: String,
     password: String,
 }
@@ -29,14 +32,16 @@ impl RestClient {
         if let Some(proxy) = &cfg.proxy {
             builder = builder.proxy(proxy.to_reqwest()?);
         }
-        if cfg.tls == TlsMode::AcceptInvalid {
+        if cfg.scheme == Scheme::Https && cfg.tls == TlsMode::AcceptInvalid {
             builder = builder.danger_accept_invalid_certs(true);
         }
 
         let http = builder.build()?;
         Ok(Self {
             http,
-            base: format!("https://{}:{}/rest", cfg.host, cfg.port),
+            base: format!("{}://{}:{}/rest", cfg.scheme.as_str(), cfg.host, cfg.port),
+            host: cfg.host.clone(),
+            port: cfg.port,
             username: cfg.username.clone(),
             password: cfg.password.clone(),
         })
@@ -60,7 +65,8 @@ impl RestClient {
             .get(&url)
             .basic_auth(&self.username, Some(&self.password))
             .send()
-            .await?;
+            .await
+            .map_err(|e| Error::from_request(e, &self.host, self.port))?;
         // read the status first: on an error we still report it cleanly even if
         // reading the body then fails (a device may frame an error response loosely)
         let status = resp.status();

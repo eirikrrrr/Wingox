@@ -4,11 +4,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { ArrowDownToLine, RefreshCw, Terminal } from "lucide-react";
+import { ArrowDownToLine, LockOpen, RefreshCw, Terminal } from "lucide-react";
 import { AmbientNetwork } from "./AmbientNetwork";
-import { newLeaf, type DeviceData, type Pane } from "./Pane";
+import { newLeaf, normalizePane, type DeviceData, type Pane } from "./Pane";
 import { Workspace } from "./Workspace";
-import { label, probe, useTheme, type DetachPayload } from "./App";
+import { PLAIN_HTTP_TITLE, isPlainHttp, label, probe, useTheme, type DetachPayload } from "./App";
 
 export function Detached({ winLabel }: { winLabel: string }) {
   useTheme();
@@ -20,7 +20,7 @@ export function Detached({ winLabel }: { winLabel: string }) {
       return null;
     }
   });
-  const [layout, setLayout] = useState<Pane>(payload?.layout ?? newLeaf());
+  const [layout, setLayout] = useState<Pane>(() => (payload ? normalizePane(payload.layout) : newLeaf()));
   const [data, setData] = useState<DeviceData | null>(payload?.data ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,6 +64,9 @@ export function Detached({ winLabel }: { winLabel: string }) {
           <div className="truncate font-mono text-sm font-semibold text-ink">{label(payload.profile)}</div>
           <div className="truncate text-[11px] text-ink-faint">
             {payload.profile.host}:{payload.profile.port}{payload.profile.proxy ? ` · via ${payload.profile.proxy.kind} ${payload.profile.proxy.host}` : ""}
+            {isPlainHttp(payload.profile) && (
+              <span title={PLAIN_HTTP_TITLE} className="ml-1 inline-flex items-center gap-0.5 text-danger"><LockOpen size={10} /> HTTP unencrypted</span>
+            )}
           </div>
         </div>
         <div className="ml-auto flex items-center gap-1.5">

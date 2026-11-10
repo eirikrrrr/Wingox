@@ -5,7 +5,7 @@ mod store;
 
 use serde::{Deserialize, Serialize};
 use store::Profile;
-use wingox_core::{ConnectionConfig, ProxyConfig, ProxyKind, RestClient, TlsMode};
+use wingox_core::{ConnectionConfig, ProxyConfig, ProxyKind, RestClient, Scheme, TlsMode};
 
 #[derive(Deserialize)]
 struct ProxyArgs {
@@ -20,6 +20,9 @@ struct ProxyArgs {
 #[serde(rename_all = "camelCase")]
 struct ConnectArgs {
     host: String,
+    /// "https" (default) or "http" — plain HTTP is unencrypted, the UI warns
+    #[serde(default)]
+    scheme: Option<String>,
     port: u16,
     username: String,
     password: String,
@@ -70,6 +73,9 @@ async fn rest_get(args: ConnectArgs, path: String) -> Result<serde_json::Value, 
 /// the connection (TLS, optional proxy) the UI asked for
 fn config(args: ConnectArgs) -> ConnectionConfig {
     let mut cfg = ConnectionConfig::new(args.host, args.username, args.password);
+    if args.scheme.as_deref() == Some("http") {
+        cfg.scheme = Scheme::Http;
+    }
     cfg.port = args.port;
     if args.insecure {
         cfg.tls = TlsMode::AcceptInvalid;

@@ -97,6 +97,14 @@ visual-tracert.
   config tree, e.g. `GET /rest/system/resource`, `GET /rest/interface`,
   `PATCH /rest/ip/address/<id>`, `PUT /rest/ip/address`, `POST .../add`,
   `DELETE`. Requires `www-ssl` enabled with a certificate on the router.
+  A `www-ssl` with `certificate=none` only offers anonymous (ADH) ciphers, which
+  no modern TLS client accepts: the handshake fails with a `handshake_failure`
+  alert, and Wingox says so explicitly. For such routers a profile can choose
+  **Protocol = HTTP** (the `www` service, port 80): REST works the same, but
+  nothing is encrypted — the Basic-auth user/password and all data cross the
+  proxy and the network in clear text. The UI shows a prominent warning when
+  that protocol is chosen and marks the device and its tab as unencrypted; the
+  real fix is assigning a certificate to `www-ssl`.
 - **Binary API** — RouterOS 6 and 7. Plaintext on **8728**, TLS on **8729**
   (the `api-ssl` service). A sentence/word protocol: commands are `/`-paths
   (`/login`, `/interface/print`, `/ip/address/add`), each word length-prefixed;
