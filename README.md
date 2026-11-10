@@ -21,6 +21,9 @@ RouterOS (REST + API binaria), con Tauri (Rust) + React/TypeScript.
 - [docs/DESIGN.en.md](docs/DESIGN.en.md) — technical design (English)
 - [docs/DESIGN.es.md](docs/DESIGN.es.md) — diseño técnico (español)
 
+The architecture as built (Mermaid diagram) is in section 4.1 of each design doc /
+el diagrama de la arquitectura actual (Mermaid) está en la sección 4.1 de cada documento.
+
 ## Build & run (desktop app)
 
 ```sh

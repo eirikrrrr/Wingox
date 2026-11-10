@@ -88,6 +88,88 @@ visual-tracert.
 └──────────────────────────────────────────────┘
 ```
 
+### 4.1 As built (v0.1.0-alpha.1)
+
+The box above is the target design. This is what exists today: the UI never
+opens connections itself, everything goes through `invoke()` to the Tauri
+commands; REST uses reqwest (which handles the proxy itself), while SSH and the
+monitor's probe need the raw TCP stream and get it from `net.rs`.
+
+```mermaid
+flowchart LR
+  subgraph UI["Frontend · React 19 + Tailwind v4 (src/)"]
+    direction TB
+    App["App.tsx<br/>devices, tabs, Close all,<br/>first-contact certificate dialog"]
+    WS["Workspace.tsx + menu.ts<br/>WinBox-style menu"]
+    Pane["Pane.tsx<br/>resizable split panes,<br/>RouterOS tables"]
+    Term["Terminal.tsx<br/>xterm.js, host-key TOFU"]
+    Cert["Certificate.tsx<br/>Pinned / CA / Public / Any"]
+    Mon["monitor.ts<br/>ping loop + notifications"]
+    Det["Detached.tsx<br/>separate windows"]
+    App --> WS --> Pane
+    WS --> Term
+    App --> Cert
+    App --> Mon
+    App -. "detach / dock" .-> Det
+  end
+
+  subgraph Shell["Tauri 2 shell (src-tauri/)"]
+    direction TB
+    Cmds["lib.rs commands<br/>connect, rest_get, tls_fetch, reach_device<br/>ssh_host_key, ssh_open/write/resize/close"]
+    Sess["SSH sessions<br/>output via Channel,<br/>closed with their window"]
+    Store["store.rs<br/>profiles.json"]
+    Notif["plugin-notification"]
+    Cmds --- Sess
+  end
+
+  subgraph Core["wingox-core (core/)"]
+    direction TB
+    Rest["routeros/rest.rs<br/>RestClient (reqwest)"]
+    TLS["tls.rs<br/>pin verifier, CA roots"]
+    Probe["probe.rs<br/>web, then SSH greeting"]
+    SSH["ssh.rs<br/>russh: pinned host key, PTY"]
+    Net["net.rs<br/>direct / SOCKS5 / HTTP CONNECT"]
+    Tr["transport.rs<br/>ProxyConfig, TlsMode"]
+    Err["error.rs<br/>clear errors"]
+    Rest --> TLS
+    Rest --> Tr
+    Probe --> Rest
+    Probe --> Net
+    SSH --> Net
+    Net --> Tr
+  end
+
+  CLI["CLI (cli/)<br/>wingox: REST, --fetch-cert,<br/>--reach, --ssh-run, --ssh-pipe"]
+
+  subgraph Netw["Network"]
+    Proxy{{"Optional proxy<br/>SOCKS5 or HTTP CONNECT<br/>e.g. Squid :3128"}}
+    subgraph ROS["MikroTik RouterOS 7"]
+      WWWS["www-ssl :443<br/>/rest (HTTPS)"]
+      WWW["www :80<br/>/rest (HTTP, unencrypted)"]
+      SSHD["ssh :22"]
+    end
+  end
+
+  App -- "invoke()" --> Cmds
+  Pane -- "rest_get" --> Cmds
+  Term -- "ssh_*" --> Cmds
+  Mon -- "reach_device" --> Cmds
+  App --> Store
+  Mon --> Notif
+  Cmds --> Rest
+  Cmds --> Probe
+  Sess --> SSH
+  CLI --> Core
+
+  Rest -- "HTTPS / HTTP" --> Proxy
+  Net -- "TCP tunnel" --> Proxy
+  Proxy --> WWWS
+  Proxy --> WWW
+  Proxy --> SSHD
+  Rest -. "direct" .-> WWWS
+  Net -. "direct" .-> SSHD
+```
+
 ## 5. Connecting to RouterOS
 
 ### 5.1 The official APIs
