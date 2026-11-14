@@ -12,6 +12,7 @@ import { DOWN_AFTER, ago, notify, useMonitor, type MonitorEvent, type ReachState
 import { MONITOR_INTERVALS, SettingsButton, beep, useSettings } from "./settings";
 import { WorkspacesMenu, pool, type Capture, type Workspace as SavedWorkspace, type WorkspaceWindow } from "./workspaces";
 import { AmbientNetwork } from "./AmbientNetwork";
+import { PixelLogo } from "./brand/PixelLogo";
 import { newLeaf, normalizePane, type DeviceData, type Pane } from "./Pane";
 import { Info } from "lucide-react";
 import { Workspace } from "./Workspace";
@@ -379,13 +380,12 @@ export function App() {
       <AmbientNetwork />
 
       <header className="flex items-center gap-3 border-b border-line/80 px-5 py-3 backdrop-blur-sm">
-        <span className="grid h-9 w-9 place-items-center rounded-md bg-accent/15 text-accent"><Terminal size={18} /></span>
         <div>
-          <h1 className="flex items-center gap-2 font-mono text-base font-semibold tracking-tight text-ink">
-            <span>wingox<span className="wx-cursor text-accent">▌</span></span>
+          <h1 className="flex items-center gap-3">
+            <PixelLogo cell={3} />
             <ReleaseBadge />
           </h1>
-          <p className="text-[11px] text-ink-faint">manage MikroTik RouterOS — through a proxy or a jump</p>
+          <p className="mt-1.5 text-[11px] text-ink-faint">manage MikroTik RouterOS — through a proxy or a jump</p>
         </div>
         <div className="ml-auto flex items-center gap-1 rounded-lg border border-line bg-panel/70 p-1">
           {THEMES.map(({ id, label: name, Icon }) => (

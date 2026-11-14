@@ -1,0 +1,12 @@
+{
+  "_": "Wingox's own 5x7 bitmap glyphs (X = lit). Single source for the header wordmark (src/brand/PixelLogo.tsx) and the app icons (dev/brand.py).",
+  "height": 7,
+  "glyphs": {
+    "W": ["X...X", "X...X", "X...X", "X.X.X", "X.X.X", "XX.XX", "X...X"],
+    "G": [".XXX.", "X...X", "X....", "X.XXX", "X...X", "X...X", ".XXX."],
+    "i": [".X.", "...", "XX.", ".X.", ".X.", ".X.", "XXX"],
+    "n": [".....", ".....", "XXXX.", "X...X", "X...X", "X...X", "X...X"],
+    "o": [".....", ".....", ".XXX.", "X...X", "X...X", "X...X", ".XXX."],
+    "x": [".....", ".....", "X...X", ".X.X.", "..X..", ".X.X.", "X...X"]
+  }
+}

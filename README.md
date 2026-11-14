@@ -1,3 +1,5 @@
+<img src="src-tauri/icons/128x128.png" width="64" alt="WinGox icon">
+
 # Wingox
 
 A cross-platform desktop app to manage MikroTik RouterOS devices — a modern
