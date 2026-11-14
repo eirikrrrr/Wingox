@@ -184,11 +184,12 @@ const PPP_INTERFACES = ["pppoe-client", "pppoe-server", "l2tp-client", "l2tp-ser
   "sstp-server", "ovpn-client", "ovpn-server", "pptp-client", "pptp-server", "ppp-client", "ppp-server"];
 
 const SPECS: Spec[] = [
+  // WinBox's order (entries a device lacks are left out)
   { id: "overview", label: "Dashboard", Icon: LayoutDashboard, view: "overview" },
+  { id: "capsman", label: "CAPsMAN", Icon: RadioTower, roots: ["caps-man"], leaf: true },
+  { id: "wifi", label: "WiFi", Icon: Wifi, roots: ["interface/wifi"], leaf: true },
   { id: "interfaces", label: "Interfaces", Icon: EthernetPort, roots: ["interface"], leaf: true },
   { id: "wireless", label: "Wireless", Icon: RadioTower, roots: ["interface/wireless"], leaf: true },
-  { id: "wifi", label: "WiFi", Icon: Wifi, roots: ["interface/wifi"], leaf: true },
-  { id: "capsman", label: "CAPsMAN", Icon: RadioTower, roots: ["caps-man"], leaf: true },
   { id: "bridge", label: "Bridge", Icon: Network, roots: ["interface/bridge"], leaf: true },
   { id: "ppp", label: "PPP", Icon: Cable, roots: ["ppp", ...PPP_INTERFACES.map((t) => `interface/${t}`)] },
   { id: "switch", label: "Switch", Icon: Waypoints, roots: ["interface/ethernet/switch"], leaf: true },
@@ -199,10 +200,10 @@ const SPECS: Spec[] = [
   { id: "system", label: "System", Icon: Settings, roots: ["system", "user", "certificate", "port", "console", "special-login"] },
   { id: "queues", label: "Queues", Icon: ListOrdered, roots: ["queue"] },
   { id: "files", label: "Files", Icon: Folder, roots: ["file"], leaf: true },
-  { id: "disks", label: "Disks", Icon: HardDrive, roots: ["disk"], leaf: true },
   { id: "log", label: "Log", Icon: ScrollText, roots: ["log"], leaf: true },
   { id: "radius", label: "RADIUS", Icon: ShieldCheck, roots: ["radius"], leaf: true },
   { id: "tools", label: "Tools", Icon: Wrench, roots: ["tool"] },
+  { id: "disks", label: "Disks", Icon: HardDrive, roots: ["disk"], leaf: true },
   // (menus of extra packages and anything unclaimed are inserted here)
   { id: "terminal", label: "New Terminal", Icon: SquareTerminal, view: "terminal" },
 ];

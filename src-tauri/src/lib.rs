@@ -20,7 +20,7 @@ use wingox_core::{
     ProbeReport, ProxyConfig, ProxyKind, RestClient, Scheme, Shell, ShellInput, ShellOutput, SshTarget, TlsMode,
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct ProxyArgs {
     kind: String,
     host: String,
@@ -29,7 +29,7 @@ struct ProxyArgs {
     password: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConnectArgs {
     host: String,
@@ -87,12 +87,59 @@ async fn connect(args: ConnectArgs) -> Result<Probe, String> {
     })
 }
 
+/// One REST client per connection (same address, credentials, TLS and proxy),
+/// kept between calls: panes refresh every few seconds, and a fresh client
+/// would pay a TCP + TLS (+ proxy) handshake each time.
+#[derive(Default)]
+struct RestClients(Mutex<HashMap<String, RestClient>>);
+
+impl RestClients {
+    fn get(&self, args: ConnectArgs) -> Result<RestClient, String> {
+        let key = serde_json::to_string(&args).map_err(|e| e.to_string())?;
+        let mut map = self.0.lock().map_err(|_| "client pool poisoned".to_string())?;
+        if let Some(client) = map.get(&key) {
+            return Ok(client.clone());
+        }
+        let client = RestClient::connect(&config(args)).map_err(|e| e.to_string())?;
+        if map.len() >= 64 {
+            map.clear(); // old connections (changed passwords, pins…): start over
+        }
+        map.insert(key, client.clone());
+        Ok(client)
+    }
+}
+
 /// Read any RouterOS menu (e.g. `ip/address`) through the same route as the
 /// connection; the menu sidebar opens each section with this.
 #[tauri::command]
-async fn rest_get(args: ConnectArgs, path: String) -> Result<serde_json::Value, String> {
-    let client = RestClient::connect(&config(args)).map_err(|e| e.to_string())?;
+async fn rest_get(clients: State<'_, RestClients>, args: ConnectArgs, path: String) -> Result<serde_json::Value, String> {
+    let client = clients.get(args)?;
     client.get(&path).await.map_err(|e| e.to_string())
+}
+
+/// Any REST request on the router — what configuring it takes: `GET` (print),
+/// `PUT` (add), `PATCH` (set an item, path ends in its `*id`), `DELETE`
+/// (remove), `POST` (a command: enable, disable, `set` on a settings menu,
+/// console/inspect…). What the user may change is the router's call: its user
+/// rights decide, and its error comes back as is.
+#[tauri::command]
+async fn rest_call(
+    clients: State<'_, RestClients>,
+    args: ConnectArgs,
+    method: String,
+    path: String,
+    body: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let method = match method.as_str() {
+        "GET" => wingox_core::Method::GET,
+        "POST" => wingox_core::Method::POST,
+        "PUT" => wingox_core::Method::PUT,
+        "PATCH" => wingox_core::Method::PATCH,
+        "DELETE" => wingox_core::Method::DELETE,
+        other => return Err(format!("unsupported method {other}")),
+    };
+    let client = clients.get(args)?;
+    client.call(method, &path, body.as_ref()).await.map_err(|e| e.to_string())
 }
 
 /// The router's own menu tree (`/console/inspect`, RouterOS 7): every menu
@@ -347,6 +394,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Sessions::default())
+        .manage(RestClients::default())
         // a closed window takes its SSH sessions with it
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
@@ -356,6 +404,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             connect,
             rest_get,
+            rest_call,
             menu_tree,
             tls_fetch,
             reach_device,

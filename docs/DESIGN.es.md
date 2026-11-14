@@ -121,7 +121,7 @@ flowchart LR
 
   subgraph Shell["Shell Tauri 2 (src-tauri/)"]
     direction TB
-    Cmds["comandos de lib.rs<br/>connect, rest_get, menu_tree, tls_fetch, reach_device<br/>ssh_host_key, ssh_open/write/resize/close"]
+    Cmds["comandos de lib.rs<br/>connect, rest_get, rest_call, menu_tree, tls_fetch, reach_device<br/>ssh_host_key, ssh_open/write/resize/close"]
     Sess["sesiones SSH<br/>salida por Channel,<br/>se cierran con su ventana"]
     Store["store.rs<br/>profiles.json"]
     Notif["plugin-notification"]
@@ -198,6 +198,26 @@ menús hermanos como **pestañas**, como una ventana de WinBox (Interfaces →
 Ethernet | VLAN | EoIP…, IP ▸ Firewall → Filter | NAT…). Los menús que ninguna
 entrada reclama tienen una entrada propia. Si no se puede leer el árbol
 (RouterOS 6, un usuario sin permisos), se muestran las secciones de siempre.
+
+### 4.3 Configurar, y tablas en vivo
+
+Cada tabla también puede cambiar el router, con el mapeo REST de la consola
+(`rest_call`): `PUT` añade, `PATCH menú/*id` modifica, `DELETE` borra y `POST
+menú/<comando>` ejecuta enable, disable o `set` en un menú de ajustes. Un panel
+tiene la barra de WinBox (añadir, quitar, activar y desactivar las filas
+seleccionadas), y un doble clic abre el elemento en una ventana
+(`src/ItemWindow.tsx`) con todas sus propiedades completas. Los campos que el
+router deja cambiar salen de `console/inspect request=syntax`, los valores que
+se ofrecen para cada uno de `request=completion`, y el cambio exacto
+(`mtu: auto → 1400`) se lista antes de aplicarlo. Los menús de ajustes
+(`ip/dns`, `system/identity`…) son un formulario en el propio panel. Wingox no
+tiene un modo de solo lectura propio: deciden los permisos del usuario del
+router, y el error de RouterOS se muestra tal como lo dice.
+
+Las tablas se actualizan solas cada pocos segundos (Configuración ▸
+Comportamiento, 2 s por defecto; se puede pausar por panel), sustituyendo las
+filas en su sitio. Se mantiene un cliente REST por conexión, así que una
+actualización no paga un nuevo saludo TCP/TLS/proxy.
 
 ## 5. Conexión con RouterOS
 

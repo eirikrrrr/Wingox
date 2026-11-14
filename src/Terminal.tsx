@@ -14,7 +14,7 @@ import { KeyRound, Loader2, RotateCw, SquareTerminal, TriangleAlert } from "luci
 import type { Profile } from "./App";
 import { monoCss, useSettings } from "./settings";
 
-interface HostKeyInfo { algorithm: string; sha256: string }
+interface HostKeyInfo { algorithm: string; sha256: string; server?: string | null; routeros?: boolean }
 interface SshError { kind: "hostKeyUnknown" | "hostKeyMismatch" | "other"; message: string; got?: string; expected?: string; algorithm?: string }
 type SshEvent = { kind: "data"; b64: string } | { kind: "closed"; reason: string | null };
 
@@ -240,7 +240,15 @@ export function SshTerminal({ profile, onPinHostKey }: { profile: Profile; onPin
               <dl className="mt-2 grid grid-cols-[64px_1fr] gap-x-2 gap-y-0.5 font-mono text-[11px]">
                 <dt className="text-ink-faint">type</dt><dd className="text-ink">{phase.key.algorithm}</dd>
                 <dt className="text-ink-faint">key</dt><dd className="break-all text-accent">{phase.key.sha256}</dd>
+                <dt className="text-ink-faint">server</dt><dd className="break-all text-ink">{phase.key.server ?? "unknown"}</dd>
               </dl>
+              {phase.key.server && !phase.key.routeros && (
+                <p className="mt-2 rounded border border-amber/40 bg-amber/10 p-1.5 text-amber">
+                  This server is not RouterOS (RouterOS says <span className="font-mono">SSH-2.0-ROSSSH</span>). The SSH port{" "}
+                  <b>{profile.sshPort ?? 22}</b> probably points at another machine: fix the SSH port in the device's profile
+                  instead of trusting this key.
+                </p>
+              )}
               <p className="mt-1.5 text-[10.5px] text-ink-faint">
                 To compare from a trusted machine: <span className="font-mono">ssh-keyscan -p {profile.sshPort ?? 22} {profile.host} | ssh-keygen -lf -</span>
               </p>

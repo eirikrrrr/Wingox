@@ -115,7 +115,7 @@ flowchart LR
 
   subgraph Shell["Tauri 2 shell (src-tauri/)"]
     direction TB
-    Cmds["lib.rs commands<br/>connect, rest_get, menu_tree, tls_fetch, reach_device<br/>ssh_host_key, ssh_open/write/resize/close"]
+    Cmds["lib.rs commands<br/>connect, rest_get, rest_call, menu_tree, tls_fetch, reach_device<br/>ssh_host_key, ssh_open/write/resize/close"]
     Sess["SSH sessions<br/>output via Channel,<br/>closed with their window"]
     Store["store.rs<br/>profiles.json"]
     Notif["plugin-notification"]
@@ -190,6 +190,24 @@ docs links). A section shows its sibling menus as **tabs**, like a WinBox
 window (Interfaces → Ethernet | VLAN | EoIP…, IP ▸ Firewall → Filter | NAT…).
 Menus no entry claims get an entry of their own. When the tree cannot be read
 (RouterOS 6, a user without the rights), the curated sections are shown.
+
+### 4.3 Configuring, and live tables
+
+Every table can also change the router, through the REST mapping of the console
+(`rest_call`): `PUT` adds, `PATCH menu/*id` sets, `DELETE` removes, `POST
+menu/<command>` runs enable, disable or `set` on a settings menu. A pane has
+WinBox's toolbar (add, remove, enable, disable on the selected rows), and a
+double-click opens the item in a window (`src/ItemWindow.tsx`) with every
+property in full; the fields the router lets you change come from
+`console/inspect request=syntax`, the values offered for each from
+`request=completion`, and the exact change (`mtu: auto → 1400`) is listed
+before it is applied. Settings menus (`ip/dns`, `system/identity`…) are an
+inline form. Wingox has no read-only mode of its own: the router user's rights
+decide, and RouterOS's error is shown as it words it.
+
+Tables refresh by themselves every few seconds (Settings ▸ Behaviour, 2 s by
+default; pausable per pane), replacing the rows in place. One REST client is
+kept per connection, so a refresh does not pay a new TCP/TLS/proxy handshake.
 
 ## 5. Connecting to RouterOS
 

@@ -39,6 +39,42 @@ pub struct HostKeyInfo {
     pub algorithm: String,
     /// OpenSSH-style `SHA256:…` (what `ssh-keygen -lf` and `ssh` print)
     pub sha256: String,
+    /// the server's greeting (`SSH-2.0-ROSSSH` on RouterOS), when it could be read
+    pub server: Option<String>,
+    /// the greeting is RouterOS's (false = probably the wrong port/machine)
+    pub routeros: bool,
+}
+
+/// RouterOS's SSH server greets with `SSH-2.0-ROSSSH`
+pub fn is_routeros(server_id: &str) -> bool {
+    server_id.contains("ROSSSH")
+}
+
+/// The SSH server's greeting line (`SSH-2.0-…`), on a connection of its own
+/// along the same route; `None` if it cannot be read in a few seconds.
+pub async fn server_id(target: &SshTarget) -> Option<String> {
+    use tokio::io::AsyncReadExt;
+    let read = async {
+        let mut stream = crate::net::connect(&target.host, target.port, target.proxy.as_ref()).await.ok()?;
+        let mut buf = Vec::with_capacity(64);
+        let mut byte = [0u8; 1];
+        // servers may send other lines first (RFC 4253); the greeting starts with SSH-
+        loop {
+            if stream.read(&mut byte).await.ok()? == 0 || buf.len() > 255 {
+                return None;
+            }
+            if byte[0] == b'\n' {
+                let line = String::from_utf8_lossy(&buf).trim().to_string();
+                if line.starts_with("SSH-") {
+                    return Some(line);
+                }
+                buf.clear();
+            } else {
+                buf.push(byte[0]);
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), read).await.ok().flatten()
 }
 
 /// `SHA256:abc=` and `abc` are the same fingerprint
@@ -63,6 +99,8 @@ impl Handler for Checker {
         let info = HostKeyInfo {
             algorithm: key.algorithm().to_string(),
             sha256: key.fingerprint(HashAlg::Sha256).to_string(),
+            server: None,
+            routeros: false,
         };
         let trusted = self.expected.as_deref().is_some_and(|e| same_fingerprint(e, &info.sha256));
         if let Ok(mut seen) = self.seen.lock() {
@@ -107,7 +145,12 @@ pub async fn fetch_host_key(target: &SshTarget) -> Result<HostKeyInfo> {
     let mut probe = target.clone();
     probe.host_key = None;
     match handshake(&probe).await {
-        Err(Error::HostKeyUnknown { got, algorithm }) => Ok(HostKeyInfo { algorithm, sha256: got }),
+        Err(Error::HostKeyUnknown { got, algorithm }) => {
+            // say who answered: a non-RouterOS server here means the wrong SSH port
+            let server = server_id(target).await;
+            let routeros = server.as_deref().is_some_and(is_routeros);
+            Ok(HostKeyInfo { algorithm, sha256: got, server, routeros })
+        }
         Err(e) => Err(e),
         Ok(_) => Err(Error::Ssh("the server accepted no host key check".into())),
     }
@@ -150,7 +193,12 @@ impl Shell {
             .await
             .map_err(|e| Error::Ssh(format!("SSH login failed: {e}")))?;
         if !auth.success() {
-            return Err(Error::SshAuth { user: target.username.clone() });
+            return Err(Error::SshAuth {
+                user: target.username.clone(),
+                host: target.host.clone(),
+                port: target.port,
+                server: server_id(target).await,
+            });
         }
         let channel = handle
             .channel_open_session()

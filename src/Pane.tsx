@@ -7,8 +7,11 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   Cpu, Clock, Boxes, Network, SplitSquareHorizontal, SplitSquareVertical, X, Terminal, RefreshCw, Search, ArrowUp, ArrowDown,
-  BookOpen,
+  BookOpen, Plus, Minus, Check, Ban, Pause, Play,
 } from "lucide-react";
+import { ItemWindow, PropertyForm, itemName } from "./ItemWindow";
+import type { Api } from "./rest";
+import { useSettings } from "./settings";
 import { docsLink, openDocs } from "./docs";
 import { sectionOf, useMenu, type Section, type Tab } from "./menu";
 
@@ -119,6 +122,8 @@ interface TreeProps {
   busy: boolean;
   error: string | null;
   fetcher: Fetcher;
+  /** configuring the device (add, set, remove…) */
+  api: Api;
   focused: string | null;
   onFocus: (leafId: string) => void;
   onSplit: (leafId: string, dir: "h" | "v") => void;
@@ -199,9 +204,11 @@ function SplitView(props: TreeProps & { split: Split }) {
   );
 }
 
-function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onClose, onView, canClose, renderTerminal }: TreeProps & { pane: LeafPane }) {
+function Leaf({ pane, data, busy, error, fetcher, api, focused, onFocus, onSplit, onClose, onView, canClose, renderTerminal }: TreeProps & { pane: LeafPane }) {
   const { section, Icon, group } = sectionOf(pane.view);
-  const tabs = useMenu().tabsOf(pane.view);
+  const menu = useMenu();
+  const tabs = menu.tabsOf(pane.view);
+  const [paused, setPaused] = useState(false);
   const [reload, setReload] = useState(0);
   const [find, setFind] = useState("");
   const isFocused = focused === pane.id;
@@ -225,7 +232,10 @@ function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onC
                   className="w-20 bg-transparent py-0.5 font-mono text-[11px] text-ink outline-none placeholder:text-ink-faint" />
               </div>
               <span className="hidden @[12rem]:contents">
-                <IconBtn title="Refresh" onClick={() => setReload((n) => n + 1)}><RefreshCw size={12} /></IconBtn>
+                <IconBtn title={paused ? "Resume auto-refresh" : "Pause auto-refresh"} onClick={() => setPaused((x) => !x)}>
+                  {paused ? <Play size={12} /> : <Pause size={12} />}
+                </IconBtn>
+                <IconBtn title="Refresh now" onClick={() => setReload((n) => n + 1)}><RefreshCw size={12} /></IconBtn>
               </span>
             </>
           )}
@@ -244,7 +254,8 @@ function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onC
           : busy ? <Centered>connecting…</Centered>
           : error ? <div className="p-3 font-mono text-sm text-danger">{error}</div>
           : !data ? <Centered>no data</Centered>
-          : section.path ? <RestView key={`${section.id}:${reload}`} section={section} fetcher={fetcher} find={find} />
+          : section.path ? <RestView key={section.id} section={section} fetcher={fetcher} api={api} find={find}
+              reload={reload} paused={paused} cmds={menu.cmdsOf(section.path)} />
           : <div className="min-h-0 flex-1 overflow-auto p-3"><BuiltIn id={section.id} data={data} /></div>}
       </div>
     </div>
@@ -396,20 +407,58 @@ function fitWidth(col: string, rows: Row[]): number {
   return Math.min(Math.max(Math.ceil(w) + 18, MIN_COL), MAX_AUTO);
 }
 
-function RestView({ section, fetcher, find }: { section: Section; fetcher: Fetcher; find: string }) {
+function RestView({ section, fetcher, api, find, reload, paused, cmds }: {
+  section: Section;
+  fetcher: Fetcher;
+  api: Api;
+  find: string;
+  /** bumped by the refresh button */
+  reload: number;
+  /** auto-refresh paused for this pane */
+  paused: boolean;
+  /** the menu's commands, when the router's tree is known */
+  cmds?: string[];
+}) {
   const [state, setState] = useState<{ loading: boolean; error: string | null; value: unknown }>({ loading: true, error: null, value: null });
+  const { settings } = useSettings();
+  const [selected, setSelected] = useState<string[]>([]);
+  const [win, setWin] = useState<{ row?: Record<string, unknown> } | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  /** a failed refresh: the last good data stays, with this note */
+  const [stale, setStale] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+  const refresh = () => setTick((n) => n + 1);
+  const can = (c: string) => !cmds || cmds.includes(c);
   const [sort, setSort] = useState<{ col: string; asc: boolean } | null>(null);
   // column widths, like WinBox: drag a header's edge, double-click it to fit; remembered per section
   const [widths, setWidths] = useState<Record<string, number>>(() => loadWidths(section.id));
   const resizing = useRef(false);
 
+  // read the menu, then again every few seconds while shown (WinBox's lists are live):
+  // the rows are replaced in place, and a failed refresh keeps the last good data
+  const first = useRef(true);
   useEffect(() => {
     let live = true;
     fetcher(section.path!)
-      .then((value) => live && setState({ loading: false, error: null, value }))
-      .catch((e) => live && setState({ loading: false, error: String(e), value: null }));
+      .then((value) => { if (live) { setState({ loading: false, error: null, value }); setStale(null); } })
+      .catch((e) => {
+        if (!live) return;
+        if (first.current) setState({ loading: false, error: String(e), value: null });
+        else setStale(String(e));
+      })
+      .finally(() => { first.current = false; });
     return () => { live = false; };
-  }, [section.path, fetcher]);
+  }, [section.path, fetcher, reload, tick]);
+
+  const every = settings.refreshEvery;
+  useEffect(() => {
+    if (!every || paused || win) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, every * 1000);
+    return () => window.clearInterval(timer);
+  }, [every, paused, win]);
 
   const rows: Row[] | null = Array.isArray(state.value) ? (state.value as Row[]) : null;
 
@@ -470,26 +519,40 @@ function RestView({ section, fetcher, find }: { section: Section; fetcher: Fetch
   if (state.loading) return <Centered>loading /{section.path}…</Centered>;
   if (state.error) return <div className="p-3 font-mono text-xs text-danger">{state.error}</div>;
 
-  // a settings menu (one object): a property sheet
+  // a settings menu (one object): its properties as a form, applied with `set`
   if (!rows) {
-    const obj = (state.value ?? {}) as Row;
-    const q = find.trim().toLowerCase();
-    const entries = Object.entries(obj).filter(([k, v]) => !q || k.includes(q) || String(v).toLowerCase().includes(q));
     return (
-      <div className="min-h-0 flex-1 overflow-auto p-2">
-        <table className="w-full font-mono text-xs">
-          <tbody>
-            {entries.map(([k, v]) => (
-              <tr key={k} className="border-b border-line/40 last:border-0">
-                <td className="w-1/3 py-1 pr-3 text-ink-faint">{k}</td>
-                <td className={`break-all py-1 ${tone(k, v) || "text-ink"}`}>{fmt(v)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <>
+        {stale && <StaleNote error={stale} />}
+        <PropertyForm api={api} path={section.path!} value={(state.value ?? {}) as Row} canSet={can("set")}
+          filter={find} onChanged={refresh} />
+      </>
     );
   }
+
+  const ids = new Set(rows.map((r) => String(r[".id"] ?? "")));
+  const sel = selected.filter((id) => ids.has(id));
+  const pick = (id: string, multi: boolean) =>
+    setSelected((cur) => (multi ? (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]) : [id]));
+  /** enable / disable / remove the selected items, one request each */
+  async function onSelected(action: "enable" | "disable" | "remove") {
+    setActionError(null);
+    setConfirmRemove(false);
+    const path = section.path!;
+    const errors: string[] = [];
+    for (const id of sel) {
+      try {
+        await (action === "remove" ? api.remove(path, id) : action === "enable" ? api.enable(path, id) : api.disable(path, id));
+      } catch (e) {
+        errors.push(String(e));
+      }
+    }
+    if (errors.length) setActionError(errors[0] + (errors.length > 1 ? ` (and ${errors.length - 1} more)` : ""));
+    if (action === "remove") setSelected([]);
+    refresh();
+  }
+  const canEdit = can("add") || can("remove") || can("enable");
+  const selRows = rows.filter((r) => sel.includes(String(r[".id"] ?? "")));
 
   const toggleSort = (col: string) => {
     if (resizing.current) return;
@@ -500,6 +563,32 @@ function RestView({ section, fetcher, find }: { section: Section; fetcher: Fetch
 
   return (
     <>
+      {canEdit && (
+        <div className="flex items-center gap-0.5 border-b border-line bg-panel-2/30 px-1 py-0.5">
+          {can("add") && <IconBtn title="Add (+)" onClick={() => setWin({})}><Plus size={13} /></IconBtn>}
+          {can("remove") && <IconBtn title="Remove the selected items" onClick={() => sel.length && setConfirmRemove(true)}><Minus size={13} /></IconBtn>}
+          {can("enable") && <IconBtn title="Enable the selected items" onClick={() => sel.length && void onSelected("enable")}><Check size={13} /></IconBtn>}
+          {can("disable") && <IconBtn title="Disable the selected items" onClick={() => sel.length && void onSelected("disable")}><Ban size={12} /></IconBtn>}
+          {confirmRemove && sel.length > 0 ? (
+            <span className="ml-2 flex items-center gap-1.5 truncate font-mono text-[11px] text-danger">
+              Remove {sel.length === 1 ? itemName(selRows[0] ?? {}) : `${sel.length} items`}?
+              <button type="button" onClick={() => void onSelected("remove")} className="rounded bg-danger/20 px-1.5 hover:bg-danger/30">yes</button>
+              <button type="button" onClick={() => setConfirmRemove(false)} className="rounded px-1.5 text-ink-dim hover:bg-panel-2">no</button>
+            </span>
+          ) : (
+            <span className="ml-2 truncate font-mono text-[10px] text-ink-faint">
+              {sel.length ? `${sel.length} selected · ` : ""}double-click a row to open it
+            </span>
+          )}
+        </div>
+      )}
+      {actionError && (
+        <div className="flex items-center gap-2 border-b border-danger/40 bg-danger/10 px-2 py-0.5 font-mono text-[11px] text-danger">
+          <span className="min-w-0 flex-1 truncate" title={actionError}>{actionError}</span>
+          <button type="button" onClick={() => setActionError(null)}><X size={12} /></button>
+        </div>
+      )}
+      {stale && <StaleNote error={stale} />}
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="table-fixed font-mono text-xs" style={{ width: total }}>
           <colgroup>
@@ -530,9 +619,12 @@ function RestView({ section, fetcher, find }: { section: Section; fetcher: Fetch
               const flags = FLAGS.filter(([k]) => truthy(r[k]));
               const rt = rowTone(r, isLog);
               const plain = rt === "text-ink";
+              const rid = String(r[".id"] ?? "");
+              const isSel = rid !== "" && sel.includes(rid);
               return (
-                <RowGroup key={String(r[".id"] ?? i)} comment={r.comment ? String(r.comment) : null} span={columns.length + 1}>
-                  <tr className={`border-b border-line/40 hover:bg-accent/5 ${rt}`}>
+                <RowGroup key={rid || i} comment={r.comment ? String(r.comment) : null} span={columns.length + 1}>
+                  <tr onClick={(e) => rid && pick(rid, e.ctrlKey || e.metaKey)} onDoubleClick={() => setWin({ row: r })}
+                    className={`cursor-default select-none border-b border-line/40 ${isSel ? "bg-accent/15" : "hover:bg-accent/5"} ${rt}`}>
                     <td className="whitespace-nowrap px-2 py-[var(--wx-row-py)] font-semibold" title={flags.map(([, , t]) => t).join(", ")}>
                       {flags.map(([k, l, , t]) => <span key={k} className={t}>{l}</span>)}
                     </td>
@@ -549,9 +641,34 @@ function RestView({ section, fetcher, find }: { section: Section; fetcher: Fetch
       </div>
       <div className="flex items-center gap-3 border-t border-line bg-panel-2/60 px-2 py-0.5 font-mono text-[10px] text-ink-faint">
         <span>{shown.length === rows.length ? items(rows.length) : `${shown.length} of ${items(rows.length)}`}</span>
+        <LiveBadge every={every} paused={paused} />
         <Legend rows={rows} />
       </div>
+      {win && (
+        <ItemWindow api={api} path={section.path!} title={section.label} row={win.row} cmds={cmds}
+          onClose={() => setWin(null)} onChanged={refresh} />
+      )}
     </>
+  );
+}
+
+/** the table refreshes by itself (WinBox-style live lists), or not */
+function LiveBadge({ every, paused }: { every: number; paused: boolean }) {
+  if (!every) return null;
+  return (
+    <span className="flex items-center gap-1" title={paused ? "Auto-refresh paused for this pane" : `Refreshed every ${every} s (Settings ▸ Behaviour)`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${paused ? "bg-ink-faint" : "wx-pulse bg-accent"}`} />
+      {paused ? "paused" : `live · ${every}s`}
+    </span>
+  );
+}
+
+/** a refresh failed: the data shown is the last good one */
+function StaleNote({ error }: { error: string }) {
+  return (
+    <div className="truncate border-b border-amber/40 bg-amber/10 px-2 py-0.5 font-mono text-[10.5px] text-amber" title={error}>
+      could not refresh — showing the last data read · {error}
+    </div>
   );
 }
 

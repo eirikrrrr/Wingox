@@ -67,9 +67,11 @@ pub enum Error {
     )]
     HostKeyMismatch { expected: String, got: String },
 
-    /// SSH password authentication was refused
-    #[error("the router refused the SSH login for user {user:?} (wrong password, or SSH not allowed for this user/address)")]
-    SshAuth { user: String },
+    /// SSH password authentication was refused. `server` is the SSH server's
+    /// greeting (`SSH-2.0-ROSSSH` on RouterOS): another server there means the
+    /// SSH port points at the wrong machine.
+    #[error("{}", ssh_auth_message(user, host, *port, server.as_deref()))]
+    SshAuth { user: String, host: String, port: u16, server: Option<String> },
 
     /// any other SSH failure
     #[error("{0}")]
@@ -151,3 +153,18 @@ fn chain_text(err: &(dyn std::error::Error + 'static)) -> String {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+fn ssh_auth_message(user: &str, host: &str, port: u16, server: Option<&str>) -> String {
+    // the login carries RouterOS console options (`admin+ct`): name the user
+    let user = user.split('+').next().unwrap_or(user);
+    match server {
+        Some(id) if !crate::ssh::is_routeros(id) => format!(
+            "the SSH server at {host}:{port} is not RouterOS (it says \"{id}\") and refused user {user:?}: \
+             check the device's SSH port in its profile"
+        ),
+        _ => format!(
+            "the router at {host}:{port} refused the SSH login for user {user:?} (wrong password, or SSH \
+             not allowed for this user/address)"
+        ),
+    }
+}

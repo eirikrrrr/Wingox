@@ -3,7 +3,7 @@
 //! reqwest client is built once with the connection's proxy and TLS settings,
 //! so every request goes through the same route to the device.
 
-use reqwest::Client;
+use reqwest::{Client, Method};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 use crate::tls::{self, CertificateInfo};
 use crate::transport::TlsMode;
 
+#[derive(Clone)]
 pub struct RestClient {
     http: Client,
     base: String,
@@ -84,21 +85,37 @@ impl RestClient {
     /// POST to a menu command (e.g. `console/inspect`, `ip/address/print`) with
     /// a JSON body of arguments, and return the parsed answer.
     pub async fn post(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
+        self.call(Method::POST, path, Some(body)).await
+    }
+
+    /// Any REST request — how RouterOS maps the console onto HTTP:
+    /// `GET menu` (print), `PUT menu {…}` (add), `PATCH menu/*id {…}` (set),
+    /// `DELETE menu/*id` (remove), `POST menu/command {…}` (any command:
+    /// enable, disable, move, `set` on a settings menu…). An empty answer
+    /// (DELETE's 204) is `null`.
+    pub async fn call(&self, method: Method, path: &str, body: Option<&serde_json::Value>) -> Result<serde_json::Value> {
         let url = self.url(path)?;
-        let req = self.http.post(&url).json(body);
+        let mut req = self.http.request(method, &url);
+        if let Some(body) = body {
+            req = req.json(body);
+        }
         self.send(req).await
     }
 
-    /// The URL of a menu path. Only plain menu paths are accepted (letters,
-    /// digits, `-`, `/`), so a UI cannot smuggle a query or another host into it.
+    /// The URL of a menu path. Only plain menu paths are accepted — segments of
+    /// letters, digits and `-`, plus an item id (`*1A`) — so a UI cannot
+    /// smuggle a query or another host into it.
     fn url(&self, path: &str) -> Result<String> {
         let path = path.trim_matches('/');
-        if path.is_empty()
-            || !path.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '/')
-            || path.contains("//")
-        {
+        let segment_ok = |s: &str| {
+            !s.is_empty()
+                && (s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                    || (s.len() > 1 && s.starts_with('*') && s[1..].chars().all(|c| c.is_ascii_hexdigit())))
+        };
+        if path.is_empty() || !path.split('/').all(segment_ok) {
             return Err(Error::Other(format!("not a RouterOS menu path: {path:?}")));
         }
+        // the id's `*` stays as is: RouterOS does not decode `%2A`
         Ok(format!("{}/{}", self.base, path))
     }
 
@@ -117,6 +134,9 @@ impl RestClient {
                 status: status.as_u16(),
                 message: short(&body),
             });
+        }
+        if body.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
         }
         serde_json::from_str(&body)
             .map_err(|e| Error::Other(format!("RouterOS sent invalid JSON: {e}")))
@@ -195,11 +215,16 @@ pub async fn reach(cfg: &ConnectionConfig, timeout: Duration) -> Result<Duration
     Ok(elapsed)
 }
 
-/// a RouterOS error body, trimmed to one short line
+/// a RouterOS error body, trimmed to one short line: its `detail` says what
+/// was wrong (`invalid value abc for mtu, an integer required`), `message`
+/// only the HTTP reason
 fn short(body: &str) -> String {
     if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(body) {
-        if let Some(serde_json::Value::String(message)) = map.get("message") {
-            return message.clone();
+        let text = |k: &str| map.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+        match (text("detail"), text("message")) {
+            (Some(detail), _) => return detail.to_string(),
+            (None, Some(message)) => return message.to_string(),
+            _ => {}
         }
     }
     let line = body.trim().lines().next().unwrap_or("").trim();

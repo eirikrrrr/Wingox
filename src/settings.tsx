@@ -27,6 +27,8 @@ export interface Settings {
   termBlink: boolean;
   termScrollback: number;
   monitorEvery: number;
+  /** tables re-read every N seconds while shown (like WinBox's live lists); 0 = off */
+  refreshEvery: number;
   confirmCloseAll: boolean;
   /** the section a newly opened device shows */
   defaultView: string;
@@ -47,6 +49,7 @@ export const DEFAULTS: Settings = {
   termBlink: true,
   termScrollback: 5000,
   monitorEvery: 30,
+  refreshEvery: 2,
   confirmCloseAll: true,
   defaultView: "overview",
   osNotifications: true,
@@ -73,6 +76,7 @@ export const ACCENTS = [
   { id: "#f472b6", label: "Pink" },
 ] as const;
 export const MONITOR_INTERVALS = [10, 30, 60, 300];
+export const REFRESH_INTERVALS = [0, 1, 2, 5, 10, 30];
 
 const fontCss = (list: { id: string; css: string }[], id: string) => (list.find((f) => f.id === id) ?? list[0]).css;
 export const monoCss = (s: Settings) => fontCss(MONO_FONTS, s.monoFont);
@@ -321,6 +325,10 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
                 <Row label="Monitor probes every">
                   <Select value={String(s.monitorEvery)} onChange={(v) => update({ monitorEvery: Number(v) })}
                     options={MONITOR_INTERVALS.map((n) => ({ id: String(n), label: n < 60 ? `${n} seconds` : `${n / 60} minute${n > 60 ? "s" : ""}` }))} />
+                </Row>
+                <Row label="Tables refresh every">
+                  <Select value={String(s.refreshEvery)} onChange={(v) => update({ refreshEvery: Number(v) })}
+                    options={REFRESH_INTERVALS.map((n) => ({ id: String(n), label: n === 0 ? "off (only with the refresh button)" : `${n} second${n > 1 ? "s" : ""}` }))} />
                 </Row>
                 <Toggle label='Ask before "Close all"' value={s.confirmCloseAll} onChange={(confirmCloseAll) => update({ confirmCloseAll })} />
                 <Row label="Column widths">
