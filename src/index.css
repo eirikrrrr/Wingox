@@ -178,3 +178,8 @@ body {
     animation: none;
   }
 }
+
+/* a pane's tab row scrolls sideways when it holds many tabs: keep its bar slim */
+.wx-tabs::-webkit-scrollbar {
+  height: 4px;
+}

@@ -100,7 +100,7 @@ flowchart LR
   subgraph UI["Frontend · React 19 + Tailwind v4 (src/)"]
     direction TB
     App["App.tsx<br/>devices, tabs, Close all,<br/>first-contact certificate dialog"]
-    WS["Workspace.tsx + menu.ts<br/>WinBox-style menu"]
+    WS["Workspace.tsx + menu.ts + routerMenu.ts<br/>WinBox-style menu, built from<br/>the router's own tree (cached)"]
     Pane["Pane.tsx<br/>resizable split panes,<br/>RouterOS tables"]
     Term["Terminal.tsx<br/>xterm.js, host-key TOFU"]
     Cert["Certificate.tsx<br/>Pinned / CA / Public / Any"]
@@ -115,7 +115,7 @@ flowchart LR
 
   subgraph Shell["Tauri 2 shell (src-tauri/)"]
     direction TB
-    Cmds["lib.rs commands<br/>connect, rest_get, tls_fetch, reach_device<br/>ssh_host_key, ssh_open/write/resize/close"]
+    Cmds["lib.rs commands<br/>connect, rest_get, menu_tree, tls_fetch, reach_device<br/>ssh_host_key, ssh_open/write/resize/close"]
     Sess["SSH sessions<br/>output via Channel,<br/>closed with their window"]
     Store["store.rs<br/>profiles.json"]
     Notif["plugin-notification"]
@@ -125,6 +125,8 @@ flowchart LR
   subgraph Core["wingox-core (core/)"]
     direction TB
     Rest["routeros/rest.rs<br/>RestClient (reqwest)"]
+    Insp["routeros/inspect.rs<br/>menu tree via console/inspect"]
+    Insp --> Rest
     TLS["tls.rs<br/>pin verifier, CA roots"]
     Probe["probe.rs<br/>web, then SSH greeting"]
     SSH["ssh.rs<br/>russh: pinned host key, PTY"]
@@ -139,7 +141,7 @@ flowchart LR
     Net --> Tr
   end
 
-  CLI["CLI (cli/)<br/>wingox: REST, --fetch-cert,<br/>--reach, --ssh-run, --ssh-pipe"]
+  CLI["CLI (cli/)<br/>wingox: REST, --fetch-cert,<br/>--reach, --menus, --ssh-run, --ssh-pipe"]
 
   subgraph Netw["Network"]
     Proxy{{"Optional proxy<br/>SOCKS5 or HTTP CONNECT<br/>e.g. Squid :3128"}}
@@ -152,6 +154,7 @@ flowchart LR
 
   App -- "invoke()" --> Cmds
   Pane -- "rest_get" --> Cmds
+  WS -- "menu_tree" --> Cmds
   Term -- "ssh_*" --> Cmds
   Mon -- "reach_device" --> Cmds
   App --> Store
@@ -169,6 +172,24 @@ flowchart LR
   Rest -. "direct" .-> WWWS
   Net -. "direct" .-> SSHD
 ```
+
+### 4.2 The menu comes from the router
+
+Like WinBox, Wingox does not ship a fixed list of screens. On connect it reads
+the router's own menu tree with `POST /rest/console/inspect`
+(`request=child`, level by level: ~450 menus on a CHR 7.23, about 2.5 s
+direct) and caches it per router and RouterOS version (`wingox.menus.*`), so
+each device shows exactly the menus its version and installed packages have
+(e.g. `interface/wireless` or `container` appear only where those packages are
+installed). A refresh button in the sidebar reads it again.
+
+Over that tree, `src/menu.ts` adds our layer: the WinBox layout (which paths
+each sidebar entry owns: Interfaces owns `interface/*` except Bridge, WiFi,
+PPP and Switch), curated names, column order and stable ids (saved layouts,
+docs links). A section shows its sibling menus as **tabs**, like a WinBox
+window (Interfaces → Ethernet | VLAN | EoIP…, IP ▸ Firewall → Filter | NAT…).
+Menus no entry claims get an entry of their own. When the tree cannot be read
+(RouterOS 6, a user without the rights), the curated sections are shown.
 
 ## 5. Connecting to RouterOS
 

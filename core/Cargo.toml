@@ -19,3 +19,5 @@ x509-parser = { version = "0.17", default-features = false }
 # the device terminal: SSH client (ring crypto, no aws-lc build on Windows)
 russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
 tokio = { version = "1", features = ["net", "io-util", "time", "sync", "rt", "macros"] }
+# a bounded number of requests in flight (menu discovery)
+futures-util = { version = "0.3", default-features = false, features = ["std"] }

@@ -10,7 +10,7 @@ import {
   BookOpen,
 } from "lucide-react";
 import { docsLink, openDocs } from "./docs";
-import { sectionOf, type Section } from "./menu";
+import { sectionOf, useMenu, type Section, type Tab } from "./menu";
 
 /** a section id from the menu (see menu.ts) */
 export type View = string;
@@ -123,6 +123,8 @@ interface TreeProps {
   onFocus: (leafId: string) => void;
   onSplit: (leafId: string, dir: "h" | "v") => void;
   onClose: (leafId: string) => void;
+  /** show another section in a pane (its tabs) */
+  onView: (leafId: string, view: View) => void;
   onResize: (splitId: string, sizes: number[]) => void;
   canClose: boolean;
   /** the device terminal (SSH) for a "terminal" pane, by pane id */
@@ -197,8 +199,9 @@ function SplitView(props: TreeProps & { split: Split }) {
   );
 }
 
-function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onClose, canClose, renderTerminal }: TreeProps & { pane: LeafPane }) {
+function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onClose, onView, canClose, renderTerminal }: TreeProps & { pane: LeafPane }) {
   const { section, Icon, group } = sectionOf(pane.view);
+  const tabs = useMenu().tabsOf(pane.view);
   const [reload, setReload] = useState(0);
   const [find, setFind] = useState("");
   const isFocused = focused === pane.id;
@@ -234,6 +237,7 @@ function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onC
           {canClose && <IconBtn title="Close pane" onClick={() => onClose(pane.id)}><X size={13} /></IconBtn>}
         </div>
       </div>
+      {tabs.map((row, i) => <TabRow key={i} tabs={row} onPick={(id) => onView(pane.id, id)} />)}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {/* the terminal is SSH: it does not depend on the REST connection */}
         {section.id === "terminal" && renderTerminal ? renderTerminal(pane.id)
@@ -243,6 +247,27 @@ function Leaf({ pane, data, busy, error, fetcher, focused, onFocus, onSplit, onC
           : section.path ? <RestView key={`${section.id}:${reload}`} section={section} fetcher={fetcher} find={find} />
           : <div className="min-h-0 flex-1 overflow-auto p-3"><BuiltIn id={section.id} data={data} /></div>}
       </div>
+    </div>
+  );
+}
+
+/** a row of tabs, like a WinBox window's: the section's sibling menus */
+function TabRow({ tabs, onPick }: { tabs: Tab[]; onPick: (id: string) => void }) {
+  const active = useRef<HTMLButtonElement>(null);
+  // keep the current tab in view when the row scrolls
+  useEffect(() => { active.current?.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [tabs]);
+  return (
+    <div role="tablist" className="wx-tabs flex shrink-0 gap-0.5 overflow-x-auto overflow-y-hidden border-b border-line bg-panel-2/30 px-1 pt-1"
+      // the wheel scrolls a long row of tabs sideways
+      onWheel={(e) => { if (e.deltaY && !e.deltaX) e.currentTarget.scrollLeft += e.deltaY; }}>
+      {tabs.map((t) => (
+        <button key={t.id} ref={t.active ? active : undefined} type="button" role="tab" aria-selected={t.active}
+          onClick={() => !t.active && onPick(t.id)}
+          className={`-mb-px shrink-0 whitespace-nowrap rounded-t border px-2 py-0.5 font-mono text-[10.5px] transition ${
+            t.active ? "border-line border-b-panel bg-panel text-accent" : "border-transparent text-ink-faint hover:text-ink"}`}>
+          {t.label}
+        </button>
+      ))}
     </div>
   );
 }

@@ -6,7 +6,7 @@
 //!
 //! Usage:
 //!   wingox <host> <user> <password> [--port 443] [--insecure | --pin <sha256> | --ca <pem-file>]
-//!          [--http] [--proxy <url>] [--fetch-cert] [--reach]
+//!          [--http] [--proxy <url>] [--fetch-cert] [--reach] [--menus]
 //!
 //! --pin accepts only the certificate with that SHA-256 fingerprint; --ca
 //! verifies the chain and the name against that CA. --fetch-cert prints the
@@ -119,6 +119,16 @@ async fn run() -> Result<(), String> {
     }
 
     let client = RestClient::connect(&cfg).map_err(|e| e.to_string())?;
+    if args.menus {
+        let started = std::time::Instant::now();
+        let tree = wingox_core::routeros::inspect::menu_tree(&client).await.map_err(|e| e.to_string())?;
+        for n in &tree {
+            println!("{:<48} {}", n.path, n.cmds.join(" "));
+        }
+        let printable = tree.iter().filter(|n| n.cmds.iter().any(|c| c == "print")).count();
+        eprintln!("{} menus ({printable} printable) in {:.1} s", tree.len(), started.elapsed().as_secs_f32());
+        return Ok(());
+    }
     let identity = client.identity().await.map_err(|e| e.to_string())?;
     let res = client.system_resource().await.map_err(|e| e.to_string())?;
 
@@ -249,6 +259,7 @@ struct Args {
     fetch_host_key: bool,
     ssh_run: Option<String>,
     ssh_pipe: bool,
+    menus: bool,
     proxy: Option<String>,
 }
 
@@ -261,6 +272,7 @@ impl Args {
         let (mut pin, mut ca, mut fetch_cert, mut reach) = (None, None, false, false);
         let (mut ssh_port, mut host_key, mut fetch_host_key, mut ssh_run) = (None, None, false, None);
         let mut ssh_pipe = false;
+        let mut menus = false;
         let mut proxy: Option<String> = None;
 
         let mut it = env::args().skip(1);
@@ -277,6 +289,7 @@ impl Args {
                 "--fetch-host-key" => fetch_host_key = true,
                 "--ssh-run" => ssh_run = Some(next(&mut it, "--ssh-run")?),
                 "--ssh-pipe" => ssh_pipe = true,
+                "--menus" => menus = true,
                 "--port" => port = Some(next(&mut it, "--port")?.parse().map_err(|_| "bad --port")?),
                 "--proxy" => proxy = Some(next(&mut it, "--proxy")?),
                 "-h" | "--help" => return Err(USAGE.to_string()),
@@ -320,6 +333,7 @@ impl Args {
             fetch_host_key,
             ssh_run,
             ssh_pipe,
+            menus,
             proxy,
         })
     }
@@ -353,4 +367,4 @@ fn parse_proxy(url: &str) -> Result<ProxyConfig, String> {
 }
 
 const USAGE: &str =
-    "usage: wingox <host> [<user> <password>] [--port 443] [--insecure | --pin <sha256> | --ca <pem>] [--http] [--proxy socks5://host:port] [--fetch-cert] [--reach]";
+    "usage: wingox <host> [<user> <password>] [--port 443] [--insecure | --pin <sha256> | --ca <pem>] [--http] [--proxy socks5://host:port] [--fetch-cert] [--reach] [--menus]";

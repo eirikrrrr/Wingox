@@ -2,6 +2,7 @@
 //! binary API (8728/8729) is added later behind a shared client trait so the
 //! rest of the app does not care which one answered.
 
+pub mod inspect;
 pub mod model;
 pub mod rest;
 

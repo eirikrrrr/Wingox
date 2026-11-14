@@ -8,7 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   Bell, Monitor, Moon, Palette, RotateCcw, Settings as Gear, SlidersHorizontal, Sun, SquareTerminal, X,
 } from "lucide-react";
-import { MENU } from "./menu";
+import { STATIC_MENU } from "./menu";
 
 export type ThemePref = "dark" | "light" | "system";
 export type Density = "compact" | "normal" | "comfortable";
@@ -222,7 +222,7 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const sections = MENU.flatMap((m) => (m.section ? [{ id: m.section.id, label: m.label }] : (m.children ?? []).map((c) => ({ id: c.id, label: `${m.label} ▸ ${c.label}` }))));
+  const sections = STATIC_MENU.items.flatMap((m) => (m.section ? [{ id: m.section.id, label: m.label }] : (m.children ?? []).map((c) => ({ id: c.id, label: `${m.label} ▸ ${c.label}` }))));
   const resetColumns = () => {
     try { for (const k of Object.keys(localStorage)) if (k.startsWith("wingox.cols.")) localStorage.removeItem(k); } catch { /* ignore */ }
   };

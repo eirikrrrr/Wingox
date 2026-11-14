@@ -74,10 +74,24 @@ impl RestClient {
     }
 
     /// GET a menu path (e.g. `ip/address`) and return its parsed JSON: an array
-    /// of rows for a list menu, an object for a settings menu. Only plain menu
-    /// paths are accepted (letters, digits, `-`, `/`), so a UI cannot smuggle a
-    /// query or another host into the URL.
+    /// of rows for a list menu, an object for a settings menu.
     pub async fn get(&self, path: &str) -> Result<serde_json::Value> {
+        let url = self.url(path)?;
+        let req = self.http.get(&url);
+        self.send(req).await
+    }
+
+    /// POST to a menu command (e.g. `console/inspect`, `ip/address/print`) with
+    /// a JSON body of arguments, and return the parsed answer.
+    pub async fn post(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
+        let url = self.url(path)?;
+        let req = self.http.post(&url).json(body);
+        self.send(req).await
+    }
+
+    /// The URL of a menu path. Only plain menu paths are accepted (letters,
+    /// digits, `-`, `/`), so a UI cannot smuggle a query or another host into it.
+    fn url(&self, path: &str) -> Result<String> {
         let path = path.trim_matches('/');
         if path.is_empty()
             || !path.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '/')
@@ -85,10 +99,11 @@ impl RestClient {
         {
             return Err(Error::Other(format!("not a RouterOS menu path: {path:?}")));
         }
-        let url = format!("{}/{}", self.base, path);
-        let resp = self
-            .http
-            .get(&url)
+        Ok(format!("{}/{}", self.base, path))
+    }
+
+    async fn send(&self, req: reqwest::RequestBuilder) -> Result<serde_json::Value> {
+        let resp = req
             .basic_auth(&self.username, Some(&self.password))
             .send()
             .await

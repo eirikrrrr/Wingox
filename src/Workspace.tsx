@@ -3,8 +3,9 @@
 // focused pane; Ctrl/⌘-click (or middle-click) opens it in a new pane beside it.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronRight, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
-import { MENU, type MenuItem, type Section } from "./menu";
+import { ChevronRight, Loader2, PanelLeftClose, PanelLeftOpen, RefreshCw, Search, TriangleAlert } from "lucide-react";
+import { MenuContext, sectionOf, under, type MenuEntry, type MenuItem, type MenuModel, type Section } from "./menu";
+import { useRouterMenu, type MenuStatus } from "./routerMenu";
 import { PaneTree, closePane, leaves, newLeaf, paneId, resizeSplit, setPaneView, splitPane, type DeviceData, type Pane } from "./Pane";
 import { restGet, type Profile } from "./App";
 import { SshTerminal } from "./Terminal";
@@ -29,6 +30,8 @@ export function Workspace({ profile, data, busy, error, layout, setLayout, onPro
   const openViews = new Set(all.map((l) => l.view));
 
   const fetcher = useCallback((path: string) => restGet(profile, path), [profile]);
+  // the menu: this router's own tree (cached), the curated one until then
+  const menu = useRouterMenu(profile, data?.version);
 
   // Terminals must outlive layout changes: splitting or closing a neighbour
   // remounts the pane tree, and an SSH session must not drop because of that.
@@ -61,8 +64,10 @@ export function Workspace({ profile, data, busy, error, layout, setLayout, onPro
   }
 
   return (
+    <MenuContext.Provider value={menu.model}>
     <div className="flex min-h-0 min-w-0 flex-1">
-      <MenuSidebar onOpen={openSection} focusedView={focusedView} openViews={openViews} />
+      <MenuSidebar model={menu.model} status={menu.status} onRefresh={menu.refresh}
+        onOpen={openSection} focusedView={focusedView} openViews={openViews} />
       <div className="flex min-h-0 min-w-0 flex-1 p-2">
         <PaneTree
           pane={layout}
@@ -75,6 +80,7 @@ export function Workspace({ profile, data, busy, error, layout, setLayout, onPro
           canClose={layout.kind === "split"}
           onSplit={(leaf, dir) => setLayout((l) => splitPane(l, leaf, dir))}
           onClose={(leaf) => setLayout((l) => closePane(l, leaf) ?? newLeaf())}
+          onView={(leaf, view) => setLayout((l) => setPaneView(l, leaf, view))}
           onResize={(split, sizes) => setLayout((l) => resizeSplit(l, split, sizes))}
           renderTerminal={(id) => <TerminalSlot node={nodeFor(id)} />}
         />
@@ -85,6 +91,7 @@ export function Workspace({ profile, data, busy, error, layout, setLayout, onPro
         id,
       ))}
     </div>
+    </MenuContext.Provider>
   );
 }
 
@@ -114,7 +121,10 @@ function store(key: string, value: unknown) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
 }
 
-function MenuSidebar({ onOpen, focusedView, openViews }: {
+function MenuSidebar({ model, status, onRefresh, onOpen, focusedView, openViews }: {
+  model: MenuModel;
+  status: MenuStatus;
+  onRefresh: () => void;
   onOpen: (id: string, inNewPane: boolean) => void;
   focusedView: string | undefined;
   openViews: Set<string>;
@@ -125,18 +135,29 @@ function MenuSidebar({ onOpen, focusedView, openViews }: {
   useEffect(() => store(COLLAPSE_KEY, collapsed), [collapsed]);
   useEffect(() => store(OPEN_KEY, expanded), [expanded]);
 
+  const MENU = model.items;
+  const focusedItem = focusedView ? model.itemOf(focusedView) : undefined;
+  const focusedPath = focusedView ? sectionOf(focusedView).section.path : undefined;
+  const openItems = useMemo(() => new Set([...openViews].map((v) => model.itemOf(v))), [openViews, model]);
+  /** a group's entry stands for a menu and everything under it (a window with tabs) */
+  const entryHolds = (item: MenuItem, c: MenuEntry, path: string | undefined, itemId: string | undefined) =>
+    itemId === item.id && !!path && under(path, c.under ?? c.path ?? "");
+
   const q = query.trim().toLowerCase();
-  // while searching, show only matching entries, with their groups unfolded
+  // while searching: every section of the device that matches, under its sidebar entry
   const items = useMemo(() => {
     if (!q) return MENU;
-    const hit = (s: string) => s.toLowerCase().includes(q);
-    return MENU.flatMap((m): MenuItem[] => {
-      if (!m.children) return hit(m.label) || hit(m.section?.path ?? "") ? [m] : [];
-      if (hit(m.label)) return [m];
-      const kids = m.children.filter((c) => hit(c.label) || hit(c.path ?? ""));
-      return kids.length ? [{ ...m, children: kids }] : [];
-    });
-  }, [q]);
+    const hit = (x: string) => x.toLowerCase().includes(q);
+    const out: MenuItem[] = [];
+    for (const m of MENU) {
+      if (m.section && !m.section.path) { if (hit(m.label)) out.push(m); continue; }
+      const kids: MenuEntry[] = model.sections
+        .filter(({ section, item }) => item === m.label && (hit(section.label) || hit(section.path ?? "") || hit(m.label)))
+        .map(({ section }) => ({ ...section, under: section.path }));
+      if (kids.length) out.push({ ...m, section: undefined, children: kids });
+    }
+    return out;
+  }, [q, MENU, model]);
 
   const toggle = (id: string) => setExpanded((e) => (e.includes(id) ? e.filter((x) => x !== id) : [...e, id]));
   const click = (s: Section) => (e: MouseEvent) => onOpen(s.id, e.ctrlKey || e.metaKey);
@@ -147,19 +168,16 @@ function MenuSidebar({ onOpen, focusedView, openViews }: {
       <nav className="flex w-11 shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-line/80 bg-panel/50 py-1.5">
         <RailBtn title="Expand menu" onClick={() => setCollapsed(false)}><PanelLeftOpen size={15} /></RailBtn>
         <div className="my-1 h-px w-6 bg-line" />
-        {MENU.map((m) => {
-          const active = m.section ? focusedView === m.section.id : m.children!.some((c) => c.id === focusedView);
-          return (
-            <RailBtn key={m.id} title={m.label} active={active}
-              onClick={(e) => {
-                if (m.section) return onOpen(m.section.id, e.ctrlKey || e.metaKey);
-                setExpanded((x) => (x.includes(m.id) ? x : [...x, m.id]));
-                setCollapsed(false);
-              }}>
-              <m.Icon size={15} />
-            </RailBtn>
-          );
-        })}
+        {MENU.map((m) => (
+          <RailBtn key={m.id} title={m.label} active={focusedItem === m.id}
+            onClick={(e) => {
+              if (m.section) return onOpen(m.section.id, e.ctrlKey || e.metaKey);
+              setExpanded((x) => (x.includes(m.id) ? x : [...x, m.id]));
+              setCollapsed(false);
+            }}>
+            <m.Icon size={15} />
+          </RailBtn>
+        ))}
       </nav>
     );
   }
@@ -180,27 +198,29 @@ function MenuSidebar({ onOpen, focusedView, openViews }: {
             const s = m.section;
             return (
               <Entry key={m.id} onClick={click(s)} onMouseDown={middle(s)}
-                active={focusedView === s.id} open={openViews.has(s.id)}>
+                active={focusedItem === m.id} open={openItems.has(m.id)}>
                 <m.Icon size={14} className="shrink-0" />
                 <span className="truncate">{m.label}</span>
               </Entry>
             );
           }
           const isOpen = !!q || expanded.includes(m.id);
-          const holds = m.children!.some((c) => c.id === focusedView);
           return (
             <div key={m.id}>
-              <Entry onClick={() => toggle(m.id)} active={false} open={holds && !isOpen}>
+              <Entry onClick={() => toggle(m.id)} active={false} open={focusedItem === m.id && !isOpen}>
                 <m.Icon size={14} className="shrink-0" />
                 <span className="truncate">{m.label}</span>
-                <ChevronRight size={12} className={`ml-auto shrink-0 text-ink-faint transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                {!q && <span className="ml-auto font-mono text-[10px] text-ink-faint">{m.children!.length}</span>}
+                <ChevronRight size={12} className={`${q ? "ml-auto" : ""} shrink-0 text-ink-faint transition-transform ${isOpen ? "rotate-90" : ""}`} />
               </Entry>
               {isOpen && (
                 <div className="mb-0.5 ml-[15px] border-l border-line pl-1.5">
                   {m.children!.map((c) => (
-                    <Entry key={c.id} onClick={click(c)} onMouseDown={middle(c)}
-                      active={focusedView === c.id} open={openViews.has(c.id)} sub>
-                      <span className="truncate">{c.label}</span>
+                    <Entry key={c.under ?? c.id} onClick={click(c)} onMouseDown={middle(c)}
+                      active={entryHolds(m, c, focusedPath, focusedItem)}
+                      open={[...openViews].some((v) => entryHolds(m, c, sectionOf(v).section.path, model.itemOf(v)))} sub>
+                      <span className="truncate" title={c.path ? `/${c.path}` : undefined}>{c.label}</span>
+                      {q && c.path && <span className="ml-auto truncate pl-1 text-[9.5px] text-ink-faint">{c.path}</span>}
                     </Entry>
                   ))}
                 </div>
@@ -210,10 +230,43 @@ function MenuSidebar({ onOpen, focusedView, openViews }: {
         })}
         {items.length === 0 && <p className="px-2 py-3 text-center font-mono text-[11px] text-ink-faint">no menu matches</p>}
       </div>
+      <MenuSource model={model} status={status} onRefresh={onRefresh} />
       <p className="border-t border-line/80 px-2.5 py-1.5 text-[10px] leading-snug text-ink-faint">
         Click opens in the focused pane · <kbd className="font-mono">Ctrl</kbd>+click in a new one
       </p>
     </nav>
+  );
+}
+
+/** where the menu comes from: the router's own tree, or the curated fallback */
+function MenuSource({ model, status, onRefresh }: { model: MenuModel; status: MenuStatus; onRefresh: () => void }) {
+  const count = model.sections.length;
+  const when = status.at ? new Date(status.at).toLocaleString() : "";
+  let text: ReactNode;
+  let title: string;
+  if (status.state === "loading") {
+    text = <><Loader2 size={11} className="animate-spin text-accent" /> reading the router's menus…</>;
+    title = "Reading this router's menu tree (console/inspect). The curated menu is shown meanwhile.";
+  } else if (status.state === "error") {
+    text = <><TriangleAlert size={11} className="text-amber" /> {model.fromRouter ? `${count} menus (old copy)` : `curated menu · ${count}`}</>;
+    title = `Could not read this router's menus: ${status.error ?? "unknown error"}`;
+  } else if (model.fromRouter) {
+    text = <>{count} menus from the router</>;
+    title = `This router's own menu tree, read ${when}. Re-read it after installing or removing packages.`;
+  } else {
+    text = <>curated menu · {count}</>;
+    title = "The router's menu tree has not been read yet.";
+  }
+  return (
+    <div className="flex items-center gap-1 border-t border-line/80 px-2.5 py-1 font-mono text-[10px] text-ink-faint" title={title}>
+      <span className="flex min-w-0 flex-1 items-center gap-1 truncate">{text}</span>
+      {status.state !== "loading" && status.state !== "static" && (
+        <button type="button" onClick={onRefresh} title="Read the router's menus again"
+          className="grid h-5 w-5 shrink-0 place-items-center rounded transition hover:bg-accent/15 hover:text-accent">
+          <RefreshCw size={11} />
+        </button>
+      )}
+    </div>
   );
 }
 

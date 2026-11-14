@@ -95,6 +95,14 @@ async fn rest_get(args: ConnectArgs, path: String) -> Result<serde_json::Value, 
     client.get(&path).await.map_err(|e| e.to_string())
 }
 
+/// The router's own menu tree (`/console/inspect`, RouterOS 7): every menu
+/// this device has, with its commands. The UI builds its menu from it.
+#[tauri::command]
+async fn menu_tree(args: ConnectArgs) -> Result<Vec<wingox_core::routeros::inspect::MenuNode>, String> {
+    let client = RestClient::connect(&config(args)).map_err(|e| e.to_string())?;
+    wingox_core::routeros::inspect::menu_tree(&client).await.map_err(|e| e.to_string())
+}
+
 /// Read the router's certificate (without trusting it, sending nothing else)
 /// so the user can pin it.
 #[tauri::command]
@@ -348,6 +356,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             connect,
             rest_get,
+            menu_tree,
             tls_fetch,
             reach_device,
             ssh_host_key,
