@@ -89,6 +89,40 @@ body {
   transition: background 0.4s ease, color 0.4s ease;
 }
 
+/* scrollbars: thin, in the theme's line color, brighter on hover. WebView2 and
+   Chromium use the ::-webkit-* rules; scrollbar-color is the standard fallback
+   (WebKitGTK/Firefox). Chromium ignores ::-webkit-* once scrollbar-color is
+   set, so the standard one only applies where ::-webkit-* is unsupported. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-faint);
+  border-width: 1px;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:active {
+  background: var(--color-ink-dim);
+  background-clip: padding-box;
+}
+
 ::selection {
   background: color-mix(in srgb, var(--color-accent) 35%, transparent);
 }

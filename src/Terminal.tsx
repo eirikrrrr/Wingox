@@ -58,6 +58,11 @@ function themeFromCss(): ITheme {
     cursor: v("--wx-accent"),
     cursorAccent: v("--wx-panel"),
     selectionBackground: `color-mix(in srgb, ${v("--wx-accent")} 30%, transparent)`,
+    // the scrollbar, like the app's own (see index.css)
+    scrollbarSliderBackground: v("--wx-line-strong"),
+    scrollbarSliderHoverBackground: v("--wx-ink-faint"),
+    scrollbarSliderActiveBackground: v("--wx-ink-dim"),
+    overviewRulerBorder: "transparent",
     black: v("--wx-line-strong"), brightBlack: v("--wx-ink-faint"),
     red: v("--wx-danger"), brightRed: v("--wx-danger"),
     green: v("--wx-ok"), brightGreen: v("--wx-accent"),
@@ -130,6 +135,8 @@ export function SshTerminal({ profile, onPinHostKey }: { profile: Profile; onPin
       cursorBlink: st.termBlink,
       scrollback: st.termScrollback,
       allowProposedApi: false,
+      // xterm draws its own scrollbar; this width also sizes it (default 14px)
+      overviewRuler: { width: 8 },
       theme: themeFromCss(),
     });
     const f = new FitAddon();
