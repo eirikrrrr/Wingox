@@ -115,7 +115,7 @@ flowchart LR
 
   subgraph Shell["Tauri 2 shell (src-tauri/)"]
     direction TB
-    Cmds["lib.rs commands<br/>connect, rest_get, rest_call, menu_tree, tls_fetch, reach_device<br/>ssh_host_key, ssh_open/write/resize/close"]
+    Cmds["lib.rs commands<br/>connect, rest_get, rest_call, menu_tree, tls_fetch, reach_device<br/>ssh_host_key, ssh_identify, ssh_open/write/resize/close"]
     Sess["SSH sessions<br/>output via Channel,<br/>closed with their window"]
     Store["store.rs<br/>profiles.json"]
     Notif["plugin-notification"]
@@ -208,6 +208,27 @@ decide, and RouterOS's error is shown as it words it.
 Tables refresh by themselves every few seconds (Settings ▸ Behaviour, 2 s by
 default; pausable per pane), replacing the rows in place. One REST client is
 kept per connection, so a refresh does not pay a new TCP/TLS/proxy handshake.
+
+### 4.4 Safer changes, reordering, sessions and secrets
+
+- **Lockout warnings** (`src/risk.ts`): REST has no Safe Mode, so a change
+  that can cut Wingox off — the interface or address it comes in through, the
+  REST/SSH/API service, an input-chain firewall rule, the login user — shows
+  why and must be acknowledged first (item window and table actions).
+- **Reorder** (firewall, NAT, queues… any menu with `move`): drag a row, or
+  "Move to top/bottom" in the row's right-click menu (`POST menu/move`).
+- **Right-click menu on rows**: open, copy a value or the whole row,
+  enable/disable, move, remove.
+- **Last session**: tabs, panes and detached windows are saved by themselves
+  as the workspace "Last session" and reopened at start (Settings ▸ Behaviour).
+- **Passwords in the OS keychain** (`src-tauri/src/secrets.rs`, crate
+  `keyring`): the RouterOS and proxy passwords leave profiles.json only after
+  being written to the keychain and read back identical; older profiles move
+  there the first time they load. If the keychain fails they stay in the file.
+- **SSH port**: when the profile's SSH port reaches another server (its
+  greeting is not RouterOS's `ROSSSH`), the terminal says so and offers to fix
+  the port, or finds it (`ssh_identify`: the router's ip/service port and a few
+  usual forwards, greeting only, no login).
 
 ## 5. Connecting to RouterOS
 

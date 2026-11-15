@@ -10,6 +10,7 @@ import { PaneTree, closePane, leaves, newLeaf, paneId, resizeSplit, setPaneView,
 import { restGet, type Profile } from "./App";
 import { SshTerminal } from "./Terminal";
 import { makeApi } from "./rest";
+import { AccessContext, type Access } from "./risk";
 
 interface Props {
   profile: Profile;
@@ -32,6 +33,27 @@ export function Workspace({ profile, data, busy, error, layout, setLayout, onPro
 
   const fetcher = useCallback((path: string) => restGet(profile, path), [profile]);
   const api = useMemo(() => makeApi(profile), [profile]);
+  // how Wingox reaches this router, for the "this may cut your access" warnings:
+  // the interfaces that carry the address it connects to (none behind NAT)
+  const [mgmtIfaces, setMgmtIfaces] = useState<string[]>([]);
+  const connected = !!data;
+  useEffect(() => {
+    if (!connected) return;
+    let live = true;
+    api.get("ip/address")
+      .then((rows) => {
+        if (!live || !Array.isArray(rows)) return;
+        setMgmtIfaces((rows as Record<string, unknown>[])
+          .filter((r) => String(r.address ?? "").split("/")[0] === profile.host)
+          .map((r) => String(r.interface ?? "")).filter(Boolean));
+      })
+      .catch(() => { /* no rights to read it: only the other checks apply */ });
+    return () => { live = false; };
+  }, [api, connected, profile.host]);
+  const access: Access = useMemo(() => ({
+    host: profile.host, scheme: profile.scheme ?? "https", port: profile.port, sshPort: profile.sshPort ?? 22,
+    username: profile.username, interfaces: mgmtIfaces,
+  }), [profile.host, profile.scheme, profile.port, profile.sshPort, profile.username, mgmtIfaces]);
   // the menu: this router's own tree (cached), the curated one until then
   const menu = useRouterMenu(profile, data?.version);
 
@@ -67,6 +89,7 @@ export function Workspace({ profile, data, busy, error, layout, setLayout, onPro
 
   return (
     <MenuContext.Provider value={menu.model}>
+    <AccessContext.Provider value={access}>
     <div className="flex min-h-0 min-w-0 flex-1">
       <MenuSidebar model={menu.model} status={menu.status} onRefresh={menu.refresh}
         onOpen={openSection} focusedView={focusedView} openViews={openViews} />
@@ -89,11 +112,13 @@ export function Workspace({ profile, data, busy, error, layout, setLayout, onPro
         />
       </div>
       {terminalPanes.map((id) => createPortal(
-        <SshTerminal profile={profile} onPinHostKey={(key) => onProfileChange({ ...profile, sshHostKey: key })} />,
+        <SshTerminal profile={profile} onPinHostKey={(key) => onProfileChange({ ...profile, sshHostKey: key })}
+          onSshPort={(sshPort) => onProfileChange({ ...profile, sshPort, sshHostKey: "" })} />,
         nodeFor(id),
         id,
       ))}
     </div>
+    </AccessContext.Provider>
     </MenuContext.Provider>
   );
 }

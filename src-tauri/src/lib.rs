@@ -1,6 +1,7 @@
 //! The Tauri desktop shell. It exposes `wingox-core` to the React UI as
 //! commands; no networking logic lives here.
 
+mod secrets;
 mod settings;
 mod store;
 mod workspaces;
@@ -224,7 +225,7 @@ fn ssh_target(args: SshArgs) -> SshTarget {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SshError {
-    /// "hostKeyUnknown" | "hostKeyMismatch" | "other"
+    /// "hostKeyUnknown" | "hostKeyMismatch" | "notRouterOS" | "other"
     kind: &'static str,
     message: String,
     got: Option<String>,
@@ -241,6 +242,10 @@ impl From<CoreError> for SshError {
             },
             CoreError::HostKeyMismatch { expected, got } => SshError {
                 kind: "hostKeyMismatch", message, got: Some(got), expected: Some(expected), algorithm: None,
+            },
+            // another SSH server answered (the profile's SSH port points elsewhere)
+            CoreError::SshAuth { server: Some(ref id), .. } if !wingox_core::is_routeros(id) => SshError {
+                kind: "notRouterOS", message, got: Some(id.clone()), expected: None, algorithm: None,
             },
             _ => SshError { kind: "other", message, got: None, expected: None, algorithm: None },
         }
@@ -260,6 +265,15 @@ enum SshEvent {
 #[tauri::command]
 async fn ssh_host_key(args: SshArgs) -> Result<HostKeyInfo, SshError> {
     fetch_host_key(&ssh_target(args)).await.map_err(SshError::from)
+}
+
+/// Who answers SSH on `port` of the device (its `SSH-…` greeting, no login):
+/// the terminal uses it to find the router's SSH port when the profile's is wrong.
+#[tauri::command]
+async fn ssh_identify(args: SshArgs, port: u16) -> Option<String> {
+    let mut target = ssh_target(args);
+    target.port = port;
+    wingox_core::server_id(&target).await
 }
 
 /// Open a shell (`cols`×`rows`); its output streams on `on_event`. Returns the
@@ -409,6 +423,7 @@ pub fn run() {
             tls_fetch,
             reach_device,
             ssh_host_key,
+            ssh_identify,
             ssh_open,
             ssh_write,
             ssh_resize,

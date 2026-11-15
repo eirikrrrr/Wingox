@@ -10,7 +10,7 @@ import {
 import { CertCard, CertificateSection, fetchCertificate, normalizePin, tlsModeOf, type CertificateInfo, type TlsMode } from "./Certificate";
 import { DOWN_AFTER, ago, notify, useMonitor, type MonitorEvent, type ReachState } from "./monitor";
 import { MONITOR_INTERVALS, SettingsButton, beep, useSettings } from "./settings";
-import { WorkspacesMenu, pool, type Capture, type Workspace as SavedWorkspace, type WorkspaceWindow } from "./workspaces";
+import { LAST_SESSION, WorkspacesMenu, pool, type Capture, type Workspace as SavedWorkspace, type WorkspaceWindow } from "./workspaces";
 import { AmbientNetwork } from "./AmbientNetwork";
 import { PixelLogo } from "./brand/PixelLogo";
 import { newLeaf, normalizePane, type DeviceData, type Pane } from "./Pane";
@@ -135,9 +135,11 @@ export function App() {
     try { localStorage.setItem("wingox.devices.folded", devicesFolded ? "1" : "0"); } catch { /* ignore */ }
   }, [devicesFolded]);
 
+  const [profilesReady, setProfilesReady] = useState(false);
   const refresh = useCallback(async () => {
     try { setProfiles(await invoke<Profile[]>("profiles_list")); }
     catch (e) { console.warn("profiles_list:", e); }
+    finally { setProfilesReady(true); }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -294,7 +296,60 @@ export function App() {
     return () => clearInterval(t);
   }, []);
 
-  /** open (or refocus) a tab for a device and connect it */
+  // ── the last session: saved as it changes, reopened at start ───────────────
+  // (a workspace like any other, id LAST_SESSION, so it also shows in the menu)
+  const startup = useRef(false);
+  const restored = useRef(false);
+  const lastSaved = useRef("");
+  async function saveLast() {
+    if (!restored.current || !settingsRef.current.restoreLastSession) return;
+    try {
+      const c = await capture();
+      const body = JSON.stringify([c.tabs, c.windows, c.activeProfileId]);
+      if (body === lastSaved.current) return;
+      await invoke("workspace_save", { workspace: {
+        version: 1, id: LAST_SESSION, name: "Last session", savedAt: Date.now(),
+        activeProfileId: c.activeProfileId, tabs: c.tabs, windows: c.windows,
+      } satisfies SavedWorkspace });
+      lastSaved.current = body;
+    } catch (e) {
+      console.warn("last session:", e);
+    }
+  }
+  const saveLastRef = useRef(saveLast);
+  saveLastRef.current = saveLast;
+  useEffect(() => {
+    if (!profilesReady || startup.current) return;
+    startup.current = true;
+    void (async () => {
+      try {
+        // the stored preference itself: the settings context may still be loading
+        const stored = await invoke<Record<string, unknown>>("settings_get").catch(() => ({} as Record<string, unknown>));
+        if (stored?.restoreLastSession === false) return;
+        const ws = (await invoke<SavedWorkspace[]>("workspaces_list")).find((w) => w.id === LAST_SESSION);
+        if (ws && (ws.tabs.length || ws.windows.length)) {
+          lastSaved.current = JSON.stringify([ws.tabs, ws.windows, ws.activeProfileId]);
+          await restore(ws);
+        }
+      } catch (e) {
+        console.warn("restore last session:", e);
+      } finally {
+        restored.current = true;
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profilesReady]);
+  // save shortly after a change of tabs/panes; detached windows move without telling: every 20 s too
+  const sessionSig = JSON.stringify([tabs.map((t) => [t.profile.id, t.layout]), active, detachedCount]);
+  useEffect(() => {
+    const t = setTimeout(() => void saveLastRef.current(), 1500);
+    return () => clearTimeout(t);
+  }, [sessionSig]);
+  useEffect(() => {
+    const t = setInterval(() => void saveLastRef.current(), 20000);
+    return () => clearInterval(t);
+  }, []);
+
   /** open (or refocus) a tab for a device and connect it; `layout` restores its panes */
   const open = useCallback(async (p: Profile, opts: { layout?: Pane; focus?: boolean } = {}) => {
     const focus = opts.focus ?? true;

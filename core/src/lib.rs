@@ -16,7 +16,7 @@ pub use error::{Error, Result};
 pub use routeros::rest::{fetch_certificate, reach, RestClient};
 /// HTTP methods for [`RestClient::call`]
 pub use reqwest::Method;
-pub use ssh::{fetch_host_key, HostKeyInfo, Shell, ShellInput, ShellOutput, SshTarget};
+pub use ssh::{fetch_host_key, is_routeros, server_id, HostKeyInfo, Shell, ShellInput, ShellOutput, SshTarget};
 pub use probe::{probe, ProbeReport};
 pub use tls::CertificateInfo;
 pub use routeros::{ConnectionConfig, Scheme};

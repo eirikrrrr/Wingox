@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Ban, Check, ClipboardCopy, Loader2, Plus, Search, Trash2, X } from "lucide-react";
 import type { Api, Field, Row } from "./rest";
+import { riskOf, useAccess } from "./risk";
 
 /** a property as text, the way the form edits it */
 const text = (v: unknown) => (v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
@@ -199,6 +200,13 @@ export function ItemWindow({ api, path, title, row, cmds, onClose, onChanged }: 
   const disabled = truthy(original.disabled);
   const readOnly = !cmd || (fieldsError !== null && !adding);
   const changes = changesOf(original, values, adding);
+  // a change that may cut Wingox's access must be acknowledged first (REST has no Safe Mode)
+  const access = useAccess();
+  const editRisk = changes.length ? riskOf(path, original, adding ? "add" : "set", asBody(changes), access) : null;
+  const [ack, setAck] = useState<string | null>(null);
+  const allowed = !editRisk || ack === editRisk;
+  /** enable/disable/remove waiting for "do it anyway" */
+  const [ask, setAsk] = useState<{ text: string; go: () => void } | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -226,7 +234,7 @@ export function ItemWindow({ api, path, title, row, cmds, onClose, onChanged }: 
   }
 
   async function apply(close: boolean) {
-    if (busy) return;
+    if (busy || !allowed) return;
     if (!changes.length) { if (close) onClose(); return; }
     const body = asBody(changes);
     const ok = adding
@@ -239,12 +247,17 @@ export function ItemWindow({ api, path, title, row, cmds, onClose, onChanged }: 
     if (ok && (close || adding)) onClose();
   }
 
-  const toggle = () => void run(disabled ? "enabling" : "disabling",
+  const doToggle = () => void run(disabled ? "enabling" : "disabling",
     () => (disabled ? api.enable(path, id!) : api.disable(path, id!)),
     () => setOriginal((o) => ({ ...o, disabled: disabled ? "false" : "true" })));
+  const toggle = () => {
+    const risk = riskOf(path, original, disabled ? "enable" : "disable", null, access);
+    if (risk) setAsk({ text: risk, go: doToggle }); else doToggle();
+  };
   const remove = async () => {
     if (await run("removing", () => api.remove(path, id!))) onClose();
   };
+  const removeRisk = confirmRemove ? riskOf(path, original, "remove", null, access) : null;
   const copy = async () => {
     const lines = Object.entries(original).filter(([k]) => !INTERNAL.has(k)).map(([k, v]) => `${k}=${text(v)}`);
     try { await navigator.clipboard.writeText(lines.join("\n")); setCopied(true); setTimeout(() => setCopied(false), 1200); } catch { /* blocked */ }
@@ -282,6 +295,19 @@ export function ItemWindow({ api, path, title, row, cmds, onClose, onChanged }: 
           )}
         </div>
         <ChangeList changes={changes} adding={adding} />
+        {(editRisk || ask || removeRisk) && (
+          <div className="flex shrink-0 items-start gap-2 border-t border-amber/50 bg-amber/10 px-3 py-1.5 font-mono text-[11px] text-amber">
+            <span className="min-w-0 flex-1">⚠ {ask?.text ?? removeRisk ?? editRisk}</span>
+            {ask ? (
+              <>
+                <button type="button" onClick={() => { const go = ask.go; setAsk(null); go(); }} className="shrink-0 rounded bg-amber/25 px-1.5 hover:bg-amber/35">do it anyway</button>
+                <button type="button" onClick={() => setAsk(null)} className="shrink-0 rounded px-1.5 text-ink-dim hover:bg-panel-2">cancel</button>
+              </>
+            ) : editRisk && !removeRisk && ack !== editRisk ? (
+              <button type="button" onClick={() => setAck(editRisk)} className="shrink-0 rounded bg-amber/25 px-1.5 hover:bg-amber/35">I understand, allow it</button>
+            ) : null}
+          </div>
+        )}
         {error && <div className="shrink-0 border-t border-danger/40 bg-danger/10 px-3 py-1.5 font-mono text-[11px] text-danger">{error}</div>}
         <div className="flex shrink-0 items-center gap-1 border-t border-line bg-panel-2/50 px-2 py-1.5">
           {!adding && id && can("enable") && (
@@ -298,9 +324,9 @@ export function ItemWindow({ api, path, title, row, cmds, onClose, onChanged }: 
           <span className="ml-auto flex items-center gap-1">
             {busy && <span className="flex items-center gap-1 font-mono text-[10.5px] text-ink-faint"><Loader2 size={11} className="animate-spin" /> {busy}…</span>}
             <Btn onClick={onClose}>{readOnly && !adding ? "Close" : "Cancel"}</Btn>
-            {!readOnly && !adding && <Btn onClick={() => void apply(false)} disabled={!!busy || !changes.length}>Apply</Btn>}
+            {!readOnly && !adding && <Btn onClick={() => void apply(false)} disabled={!!busy || !changes.length || !allowed}>Apply</Btn>}
             {!readOnly && (
-              <Btn tone="primary" onClick={() => void apply(true)} disabled={!!busy || (adding && !changes.length)}
+              <Btn tone="primary" onClick={() => void apply(true)} disabled={!!busy || (adding && !changes.length) || !allowed}
                 title="Ctrl+Enter">{adding ? "Add" : "OK"}</Btn>
             )}
           </span>

@@ -121,7 +121,7 @@ flowchart LR
 
   subgraph Shell["Shell Tauri 2 (src-tauri/)"]
     direction TB
-    Cmds["comandos de lib.rs<br/>connect, rest_get, rest_call, menu_tree, tls_fetch, reach_device<br/>ssh_host_key, ssh_open/write/resize/close"]
+    Cmds["comandos de lib.rs<br/>connect, rest_get, rest_call, menu_tree, tls_fetch, reach_device<br/>ssh_host_key, ssh_identify, ssh_open/write/resize/close"]
     Sess["sesiones SSH<br/>salida por Channel,<br/>se cierran con su ventana"]
     Store["store.rs<br/>profiles.json"]
     Notif["plugin-notification"]
@@ -218,6 +218,30 @@ Las tablas se actualizan solas cada pocos segundos (Configuración ▸
 Comportamiento, 2 s por defecto; se puede pausar por panel), sustituyendo las
 filas en su sitio. Se mantiene un cliente REST por conexión, así que una
 actualización no paga un nuevo saludo TCP/TLS/proxy.
+
+### 4.4 Cambios más seguros, reordenar, sesiones y secretos
+
+- **Avisos de bloqueo** (`src/risk.ts`): el REST no tiene Safe Mode, así que
+  un cambio que puede dejar a Wingox sin acceso —la interfaz o la dirección por
+  la que entra, el servicio REST/SSH/API, una regla de firewall de la cadena
+  input, el usuario con el que entra— explica por qué y hay que aceptarlo antes
+  (en la ventana del elemento y en las acciones de la tabla).
+- **Reordenar** (firewall, NAT, colas… cualquier menú con `move`): arrastrar
+  una fila, o "Move to top/bottom" en el menú del clic derecho (`POST menú/move`).
+- **Menú del clic derecho en las filas**: abrir, copiar un valor o la fila
+  entera, activar/desactivar, mover, borrar.
+- **Última sesión**: pestañas, paneles y ventanas separadas se guardan solas
+  como el espacio "Last session" y se reabren al arrancar (Configuración ▸
+  Comportamiento).
+- **Contraseñas en el llavero del sistema** (`src-tauri/src/secrets.rs`, crate
+  `keyring`): las contraseñas de RouterOS y del proxy salen de profiles.json
+  solo después de escribirse en el llavero y leerse idénticas; los perfiles
+  antiguos se migran la primera vez que se cargan. Si el llavero falla, se
+  quedan en el fichero.
+- **Puerto SSH**: si el puerto SSH del perfil llega a otro servidor (su saludo
+  no es el `ROSSSH` de RouterOS), el terminal lo dice y ofrece corregir el
+  puerto o encontrarlo (`ssh_identify`: el puerto de ip/service del router y
+  algunos reenvíos habituales; solo el saludo, sin login).
 
 ## 5. Conexión con RouterOS
 

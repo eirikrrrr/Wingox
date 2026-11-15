@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { ItemWindow, PropertyForm, itemName } from "./ItemWindow";
 import type { Api } from "./rest";
+import { riskOf, useAccess, type Action } from "./risk";
 import { useSettings } from "./settings";
 import { docsLink, openDocs } from "./docs";
 import { sectionOf, useMenu, type Section, type Tab } from "./menu";
@@ -423,7 +424,13 @@ function RestView({ section, fetcher, api, find, reload, paused, cmds }: {
   const { settings } = useSettings();
   const [selected, setSelected] = useState<string[]>([]);
   const [win, setWin] = useState<{ row?: Record<string, unknown> } | null>(null);
-  const [confirmRemove, setConfirmRemove] = useState(false);
+  /** an action waiting for a yes: a removal, or a change that may cut Wingox's access */
+  const [pending, setPending] = useState<{ action: Action; ids: string[]; before?: string; risk: string | null } | null>(null);
+  /** drag to reorder (menus with `move`: firewall, NAT, queues…) */
+  const [drag, setDrag] = useState<{ id: string; over?: string; after?: boolean } | null>(null);
+  /** the right-click menu of a row */
+  const [menu, setMenu] = useState<{ x: number; y: number; row: Record<string, unknown>; col?: string } | null>(null);
+  const access = useAccess();
   const [actionError, setActionError] = useState<string | null>(null);
   /** a failed refresh: the last good data stays, with this note */
   const [stale, setStale] = useState<string | null>(null);
@@ -534,25 +541,50 @@ function RestView({ section, fetcher, api, find, reload, paused, cmds }: {
   const sel = selected.filter((id) => ids.has(id));
   const pick = (id: string, multi: boolean) =>
     setSelected((cur) => (multi ? (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]) : [id]));
-  /** enable / disable / remove the selected items, one request each */
-  async function onSelected(action: "enable" | "disable" | "remove") {
+  const path = section.path!;
+  const list: Row[] = rows; // (narrowed: closures below keep it)
+  const rowById = (id: string) => list.find((r) => String(r[".id"] ?? "") === id);
+
+  /** run an action on items, one request each */
+  async function run(action: Action, targets: string[], before?: string) {
     setActionError(null);
-    setConfirmRemove(false);
-    const path = section.path!;
+    setPending(null);
     const errors: string[] = [];
-    for (const id of sel) {
+    for (const id of targets) {
       try {
-        await (action === "remove" ? api.remove(path, id) : action === "enable" ? api.enable(path, id) : api.disable(path, id));
+        await (action === "remove" ? api.remove(path, id)
+          : action === "enable" ? api.enable(path, id)
+          : action === "disable" ? api.disable(path, id)
+          : api.move(path, id, before));
       } catch (e) {
         errors.push(String(e));
       }
     }
     if (errors.length) setActionError(errors[0] + (errors.length > 1 ? ` (and ${errors.length - 1} more)` : ""));
-    if (action === "remove") setSelected([]);
+    if (action === "remove") setSelected((cur) => cur.filter((x) => !targets.includes(x)));
     refresh();
   }
+  /** ask first when removing, or when the change may cut Wingox's access (REST has no Safe Mode) */
+  function request(action: Action, targets: string[], before?: string) {
+    if (!targets.length) return;
+    const risk = targets.map((id) => riskOf(path, rowById(id), action, null, access)).find(Boolean) ?? null;
+    if (action === "remove" || risk) setPending({ action, ids: targets, before, risk });
+    else void run(action, targets, before);
+  }
   const canEdit = can("add") || can("remove") || can("enable");
-  const selRows = rows.filter((r) => sel.includes(String(r[".id"] ?? "")));
+  const canMove = !!cmds?.includes("move") && !sort && !find.trim();
+  const pendingRows = (pending?.ids ?? []).map(rowById).filter(Boolean) as Row[];
+
+  /** drop the dragged row before (or after) the target row */
+  function drop(targetId: string, after: boolean) {
+    if (!drag || drag.id === targetId) { setDrag(null); return; }
+    const order = list.map((r) => String(r[".id"] ?? ""));
+    const before = after ? order[order.indexOf(targetId) + 1] : targetId;
+    setDrag(null);
+    if (before === drag.id) return; // already there
+    request("move", [drag.id], before);
+  }
+  const copy = (textValue: string) => { void navigator.clipboard?.writeText(textValue).catch(() => {}); };
 
   const toggleSort = (col: string) => {
     if (resizing.current) return;
@@ -566,20 +598,28 @@ function RestView({ section, fetcher, api, find, reload, paused, cmds }: {
       {canEdit && (
         <div className="flex items-center gap-0.5 border-b border-line bg-panel-2/30 px-1 py-0.5">
           {can("add") && <IconBtn title="Add (+)" onClick={() => setWin({})}><Plus size={13} /></IconBtn>}
-          {can("remove") && <IconBtn title="Remove the selected items" onClick={() => sel.length && setConfirmRemove(true)}><Minus size={13} /></IconBtn>}
-          {can("enable") && <IconBtn title="Enable the selected items" onClick={() => sel.length && void onSelected("enable")}><Check size={13} /></IconBtn>}
-          {can("disable") && <IconBtn title="Disable the selected items" onClick={() => sel.length && void onSelected("disable")}><Ban size={12} /></IconBtn>}
-          {confirmRemove && sel.length > 0 ? (
-            <span className="ml-2 flex items-center gap-1.5 truncate font-mono text-[11px] text-danger">
-              Remove {sel.length === 1 ? itemName(selRows[0] ?? {}) : `${sel.length} items`}?
-              <button type="button" onClick={() => void onSelected("remove")} className="rounded bg-danger/20 px-1.5 hover:bg-danger/30">yes</button>
-              <button type="button" onClick={() => setConfirmRemove(false)} className="rounded px-1.5 text-ink-dim hover:bg-panel-2">no</button>
-            </span>
-          ) : (
-            <span className="ml-2 truncate font-mono text-[10px] text-ink-faint">
-              {sel.length ? `${sel.length} selected · ` : ""}double-click a row to open it
-            </span>
-          )}
+          {can("remove") && <IconBtn title="Remove the selected items" onClick={() => request("remove", sel)}><Minus size={13} /></IconBtn>}
+          {can("enable") && <IconBtn title="Enable the selected items" onClick={() => request("enable", sel)}><Check size={13} /></IconBtn>}
+          {can("disable") && <IconBtn title="Disable the selected items" onClick={() => request("disable", sel)}><Ban size={12} /></IconBtn>}
+          <span className="ml-2 truncate font-mono text-[10px] text-ink-faint">
+            {sel.length ? `${sel.length} selected · ` : ""}double-click a row to open it{canMove ? " · drag to reorder" : ""}
+          </span>
+        </div>
+      )}
+      {pending && (
+        <div className={`flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b px-2 py-1 font-mono text-[11px] ${
+          pending.risk ? "border-amber/50 bg-amber/10 text-amber" : "border-danger/40 bg-danger/10 text-danger"}`}>
+          <span className="min-w-0 flex-1">
+            {pending.risk ? <>⚠ {pending.risk} </> : null}
+            {pending.action === "remove" ? `Remove ${pendingRows.length === 1 ? itemName(pendingRows[0]) : `${pending.ids.length} items`}?`
+              : pending.action === "move" ? `Move ${itemName(pendingRows[0] ?? {})}?`
+              : `${pending.action === "enable" ? "Enable" : "Disable"} ${pendingRows.length === 1 ? itemName(pendingRows[0]) : `${pending.ids.length} items`}?`}
+          </span>
+          <button type="button" onClick={() => void run(pending.action, pending.ids, pending.before)}
+            className={`rounded px-1.5 ${pending.risk ? "bg-amber/25 hover:bg-amber/35" : "bg-danger/20 hover:bg-danger/30"}`}>
+            {pending.risk ? "do it anyway" : "yes"}
+          </button>
+          <button type="button" onClick={() => setPending(null)} className="rounded px-1.5 text-ink-dim hover:bg-panel-2">cancel</button>
         </div>
       )}
       {actionError && (
@@ -624,12 +664,31 @@ function RestView({ section, fetcher, api, find, reload, paused, cmds }: {
               return (
                 <RowGroup key={rid || i} comment={r.comment ? String(r.comment) : null} span={columns.length + 1}>
                   <tr onClick={(e) => rid && pick(rid, e.ctrlKey || e.metaKey)} onDoubleClick={() => setWin({ row: r })}
-                    className={`cursor-default select-none border-b border-line/40 ${isSel ? "bg-accent/15" : "hover:bg-accent/5"} ${rt}`}>
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      if (rid && !isSel) setSelected([rid]);
+                      const cell = (e.target as HTMLElement).closest("td");
+                      setMenu({ x: e.clientX, y: e.clientY, row: r, col: cell?.dataset.col });
+                    }}
+                    draggable={canMove && !!rid}
+                    onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; setDrag({ id: rid }); }}
+                    onDragOver={(e) => {
+                      if (!drag || !rid) return;
+                      e.preventDefault();
+                      const box = e.currentTarget.getBoundingClientRect();
+                      const after = e.clientY > box.top + box.height / 2;
+                      if (drag.over !== rid || drag.after !== after) setDrag({ ...drag, over: rid, after });
+                    }}
+                    onDrop={(e) => { e.preventDefault(); if (rid) drop(rid, !!drag?.after); }}
+                    onDragEnd={() => setDrag(null)}
+                    className={`cursor-default select-none border-b border-line/40 ${isSel ? "bg-accent/15" : "hover:bg-accent/5"} ${rt} ${
+                      drag?.id === rid ? "opacity-40" : ""} ${
+                      drag?.over === rid && drag.id !== rid ? (drag.after ? "shadow-[inset_0_-2px_0_var(--color-accent)]" : "shadow-[inset_0_2px_0_var(--color-accent)]") : ""}`}>
                     <td className="whitespace-nowrap px-2 py-[var(--wx-row-py)] font-semibold" title={flags.map(([, , t]) => t).join(", ")}>
                       {flags.map(([k, l, , t]) => <span key={k} className={t}>{l}</span>)}
                     </td>
                     {columns.map((c) => (
-                      <td key={c} className={`truncate whitespace-nowrap px-2 py-[var(--wx-row-py)] ${plain ? tone(c, r[c]) : ""}`} title={fmt(r[c])}>{fmt(r[c])}</td>
+                      <td key={c} data-col={c} className={`truncate whitespace-nowrap px-2 py-[var(--wx-row-py)] ${plain ? tone(c, r[c]) : ""}`} title={fmt(r[c])}>{fmt(r[c])}</td>
                     ))}
                   </tr>
                 </RowGroup>
@@ -648,7 +707,61 @@ function RestView({ section, fetcher, api, find, reload, paused, cmds }: {
         <ItemWindow api={api} path={section.path!} title={section.label} row={win.row} cmds={cmds}
           onClose={() => setWin(null)} onChanged={refresh} />
       )}
+      {menu && (
+        <RowMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
+          { label: "Open…", hint: "double-click", run: () => setWin({ row: menu.row }) },
+          ...(menu.col ? [{ label: `Copy ${menu.col}`, run: () => copy(fmt(menu.row[menu.col!])) }] : []),
+          { label: "Copy row", hint: "name=value", run: () => copy(Object.entries(menu.row).filter(([k]) => !k.startsWith(".")).map(([k, v]) => `${k}=${fmt(v)}`).join("\n")) },
+          null,
+          ...(can("enable") ? [{ label: sel.length > 1 ? `Enable ${sel.length} items` : "Enable", run: () => request("enable", sel) }] : []),
+          ...(can("disable") ? [{ label: sel.length > 1 ? `Disable ${sel.length} items` : "Disable", run: () => request("disable", sel) }] : []),
+          ...(canMove && rows.length > 1 ? [
+            { label: "Move to top", run: () => request("move", sel.slice(0, 1), String(rows[0][".id"] ?? "")) },
+            { label: "Move to bottom", run: () => request("move", sel.slice(0, 1)) },
+          ] : []),
+          ...(can("remove") ? [null, { label: sel.length > 1 ? `Remove ${sel.length} items…` : "Remove…", danger: true, run: () => request("remove", sel) }] : []),
+        ]} />
+      )}
     </>
+  );
+}
+
+type MenuEntryDef = { label: string; hint?: string; danger?: boolean; run: () => void } | null;
+
+/** a small right-click menu (the browser's own is off app-wide) */
+function RowMenu({ x, y, items: entries, onClose }: { x: number; y: number; items: MenuEntryDef[]; onClose: () => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ x, y });
+  useEffect(() => {
+    const el = box.current;
+    if (el) setPos({ x: Math.min(x, window.innerWidth - el.offsetWidth - 6), y: Math.min(y, window.innerHeight - el.offsetHeight - 6) });
+    const close = (e: Event) => { if (!box.current?.contains(e.target as Node)) onClose(); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("mousedown", close, true);
+    window.addEventListener("wheel", onClose, true);
+    window.addEventListener("keydown", key);
+    window.addEventListener("blur", onClose);
+    return () => {
+      window.removeEventListener("mousedown", close, true);
+      window.removeEventListener("wheel", onClose, true);
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("blur", onClose);
+    };
+  }, [x, y, onClose]);
+  // the trailing / doubled separators of entries that do not apply are dropped
+  const list = entries.filter((e, i, all) => e || (i > 0 && all[i - 1] && i < all.length - 1));
+  return (
+    <div ref={box} role="menu" style={{ left: pos.x, top: pos.y }} onContextMenu={(e) => e.preventDefault()}
+      className="fixed z-50 min-w-44 rounded-md border border-line-strong bg-panel py-1 shadow-xl">
+      {list.map((e, i) => e === null ? <div key={i} className="my-1 h-px bg-line" /> : (
+        <button key={i} type="button" role="menuitem" onClick={() => { onClose(); e.run(); }}
+          className={`flex w-full items-center gap-3 whitespace-nowrap px-3 py-[3px] text-left font-mono text-xs transition ${
+            e.danger ? "text-danger hover:bg-danger/15" : "text-ink-dim hover:bg-accent/10 hover:text-ink"}`}>
+          {e.label}
+          {e.hint && <span className="ml-auto text-[10px] text-ink-faint">{e.hint}</span>}
+        </button>
+      ))}
+    </div>
   );
 }
 

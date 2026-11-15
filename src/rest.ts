@@ -29,6 +29,8 @@ export interface Api {
   remove: (path: string, id: string) => Promise<unknown>;
   enable: (path: string, id: string) => Promise<unknown>;
   disable: (path: string, id: string) => Promise<unknown>;
+  /** move an item before another one (`before` absent: to the end), e.g. firewall rule order */
+  move: (path: string, id: string, before?: string) => Promise<unknown>;
   /** the fields a command takes, with their help text (cached per device) */
   fields: (path: string, cmd: string) => Promise<Field[]>;
   /** the values a field may take, when RouterOS knows them (enums, interface names…) */
@@ -68,13 +70,15 @@ export function makeApi(p: Profile): Api {
     remove: (path, id) => call("DELETE", `${path}/${id}`),
     enable: (path, id) => call("POST", `${path}/enable`, { ".id": id }),
     disable: (path, id) => call("POST", `${path}/disable`, { ".id": id }),
+    move: (path, id, before) => call("POST", `${path}/move`, before ? { numbers: id, destination: before } : { numbers: id }),
     fields: (path, cmd) =>
       cached(`${device} syntax ${path} ${cmd}`, async () => {
         const out = await inspect({ request: "syntax", path: `${comma(path)},${cmd}` });
         return out
           .filter((x) => x["symbol-type"] === "explanation" && x.nested === "1")
           .map((x) => ({ name: String(x.symbol), help: String(x.text ?? "") }))
-          .filter((f) => f.name && !NOT_FIELDS.has(f.name));
+          // `<numbers>` and the like are positional arguments, not properties
+          .filter((f) => f.name && !f.name.startsWith("<") && !NOT_FIELDS.has(f.name));
       }),
     // not cached: they change (a new interface, a new address list…)
     values: async (path, cmd, field) => {

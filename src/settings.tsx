@@ -29,6 +29,8 @@ export interface Settings {
   monitorEvery: number;
   /** tables re-read every N seconds while shown (like WinBox's live lists); 0 = off */
   refreshEvery: number;
+  /** reopen the devices, panes and windows of the last session at start */
+  restoreLastSession: boolean;
   confirmCloseAll: boolean;
   /** the section a newly opened device shows */
   defaultView: string;
@@ -50,6 +52,7 @@ export const DEFAULTS: Settings = {
   termScrollback: 5000,
   monitorEvery: 30,
   refreshEvery: 2,
+  restoreLastSession: true,
   confirmCloseAll: true,
   defaultView: "overview",
   osNotifications: true,
@@ -330,6 +333,8 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
                   <Select value={String(s.refreshEvery)} onChange={(v) => update({ refreshEvery: Number(v) })}
                     options={REFRESH_INTERVALS.map((n) => ({ id: String(n), label: n === 0 ? "off (only with the refresh button)" : `${n} second${n > 1 ? "s" : ""}` }))} />
                 </Row>
+                <Toggle label="Reopen the last session at start" value={s.restoreLastSession}
+                  onChange={(restoreLastSession) => update({ restoreLastSession })} />
                 <Toggle label='Ask before "Close all"' value={s.confirmCloseAll} onChange={(confirmCloseAll) => update({ confirmCloseAll })} />
                 <Row label="Column widths">
                   <button type="button" onClick={resetColumns}

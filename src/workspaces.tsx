@@ -9,6 +9,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { Bookmark, FolderOpen, Loader2, RefreshCw, Save, Trash2, TriangleAlert } from "lucide-react";
 import type { Pane } from "./Pane";
 
+/** the workspace Wingox saves by itself (the session to reopen at start) */
+export const LAST_SESSION = "last-session";
+
 export interface WorkspaceTab { profileId: string; layout: Pane }
 export interface WorkspaceWindow extends WorkspaceTab { x: number; y: number; width: number; height: number }
 

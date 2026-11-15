@@ -10,12 +10,12 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { KeyRound, Loader2, RotateCw, SquareTerminal, TriangleAlert } from "lucide-react";
-import type { Profile } from "./App";
+import { KeyRound, Loader2, RotateCw, Search, SquareTerminal, TriangleAlert } from "lucide-react";
+import { restGet, type Profile } from "./App";
 import { monoCss, useSettings } from "./settings";
 
 interface HostKeyInfo { algorithm: string; sha256: string; server?: string | null; routeros?: boolean }
-interface SshError { kind: "hostKeyUnknown" | "hostKeyMismatch" | "other"; message: string; got?: string; expected?: string; algorithm?: string }
+interface SshError { kind: "hostKeyUnknown" | "hostKeyMismatch" | "notRouterOS" | "other"; message: string; got?: string; expected?: string; algorithm?: string }
 type SshEvent = { kind: "data"; b64: string } | { kind: "closed"; reason: string | null };
 
 type Phase =
@@ -25,7 +25,7 @@ type Phase =
   | { at: "connecting" }
   | { at: "open" }
   | { at: "closed"; reason: string | null }
-  | { at: "error"; message: string };
+  | { at: "error"; message: string; notRouterOS?: boolean };
 
 export const sshArgs = (p: Profile) => ({
   host: p.host,
@@ -74,7 +74,12 @@ function themeFromCss(): ITheme {
   };
 }
 
-export function SshTerminal({ profile, onPinHostKey }: { profile: Profile; onPinHostKey: (key: string) => void }) {
+export function SshTerminal({ profile, onPinHostKey, onSshPort }: {
+  profile: Profile;
+  onPinHostKey: (key: string) => void;
+  /** the user fixed the device's SSH port here (its pinned key belonged to the old one) */
+  onSshPort: (port: number) => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const term = useRef<XTerm | null>(null);
   const fit = useRef<FitAddon | null>(null);
@@ -121,9 +126,16 @@ export function SshTerminal({ profile, onPinHostKey }: { profile: Profile; onPin
       const err = asSshError(e);
       if (err.kind === "hostKeyMismatch") setPhase({ at: "mismatch", expected: err.expected ?? "", got: err.got ?? "" });
       else if (err.kind === "hostKeyUnknown") setPhase({ at: "trust", key: { algorithm: err.algorithm ?? "", sha256: err.got ?? "" } });
-      else setPhase({ at: "error", message: err.message });
+      else setPhase({ at: "error", message: err.message, notRouterOS: err.kind === "notRouterOS" });
     }
   }, [closeSession]);
+
+  /** use another SSH port: saved in the profile, the old pinned key dropped, then connect */
+  const usePort = useCallback((port: number) => {
+    profileRef.current = { ...profileRef.current, sshPort: port, sshHostKey: "" };
+    onSshPort(port);
+    void connect("");
+  }, [onSshPort, connect]);
 
   // the terminal itself lives as long as the pane
   useEffect(() => {
@@ -284,10 +296,76 @@ export function SshTerminal({ profile, onPinHostKey }: { profile: Profile; onPin
                 className="mt-2 inline-flex items-center gap-1 rounded border border-line-strong px-2.5 py-1 font-mono text-[11px] text-ink-dim hover:text-accent">
                 <RotateCw size={11} /> Retry
               </button>
+              <PortFixer profile={profile} highlight={!!phase.notRouterOS} onUse={usePort} />
             </div>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** SSH ports worth trying when the profile's one is wrong (port forwards, NAT…) */
+const COMMON_SSH_PORTS = [22, 2022, 2222, 8022, 22022, 10022];
+
+/**
+ * Fix the device's SSH port from the terminal itself: type it, or let Wingox
+ * find it — the SSH port the router itself reports (ip/service) and a few
+ * usual forwards, keeping the first whose server greets as RouterOS (ROSSSH).
+ * Only the greeting is read: no login, no password sent.
+ */
+function PortFixer({ profile, highlight, onUse }: { profile: Profile; highlight: boolean; onUse: (port: number) => void }) {
+  const current = profile.sshPort ?? 22;
+  const [port, setPort] = useState(String(current));
+  const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function find() {
+    setBusy(true);
+    setNote(null);
+    const candidates: number[] = [];
+    try {
+      // the router's own SSH service port (the real one when there is no port forward)
+      const services = await restGet(profile, "ip/service") as Record<string, unknown>[];
+      const ssh = Array.isArray(services) ? services.find((s) => s.name === "ssh") : undefined;
+      if (ssh?.port) candidates.push(Number(ssh.port));
+    } catch { /* no REST rights: the usual ports below */ }
+    for (const p of COMMON_SSH_PORTS) if (!candidates.includes(p)) candidates.push(p);
+    const tried: string[] = [];
+    for (const p of candidates) {
+      const id = await invoke<string | null>("ssh_identify", { args: sshArgs(profile), port: p }).catch(() => null);
+      tried.push(`${p}: ${id ?? "no answer"}`);
+      if (id && id.includes("ROSSSH")) {
+        setPort(String(p));
+        setNote({ text: `RouterOS answers SSH on port ${p}.`, ok: true });
+        setBusy(false);
+        return;
+      }
+    }
+    setNote({ text: `No RouterOS SSH found (${tried.join(" · ")}). Check the router's ip/service ssh and any port forward.`, ok: false });
+    setBusy(false);
+  }
+
+  const n = Number(port);
+  const valid = Number.isInteger(n) && n > 0 && n < 65536;
+  return (
+    <div className={`mt-3 rounded-md border p-2 text-left font-mono text-[11px] ${highlight ? "border-amber/50 bg-amber/10" : "border-line bg-panel-2/40"}`}>
+      <div className="mb-1.5 text-ink-dim">
+        {highlight ? "The SSH port of this device points at another machine. The router's SSH port:" : "SSH port of this device:"}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <input value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))} inputMode="numeric"
+          className="w-20 rounded border border-line bg-panel px-1.5 py-0.5 text-ink outline-none focus:border-accent" />
+        <button type="button" onClick={() => void find()} disabled={busy}
+          className="inline-flex items-center gap-1 rounded border border-line-strong px-2 py-0.5 text-ink-dim hover:text-accent disabled:opacity-50">
+          {busy ? <Loader2 size={11} className="animate-spin" /> : <Search size={11} />} Find it
+        </button>
+        <button type="button" onClick={() => valid && onUse(n)} disabled={!valid || n === current && !highlight}
+          className="ml-auto rounded bg-accent px-2 py-0.5 font-semibold text-bg hover:brightness-110 disabled:opacity-40">
+          Save &amp; connect
+        </button>
+      </div>
+      {note && <p className={`mt-1.5 ${note.ok ? "text-accent" : "text-ink-faint"}`}>{note.text}</p>}
     </div>
   );
 }

@@ -23,6 +23,14 @@ wingox-core = { path = "../core" }
 # the input side of each SSH session (UI → router)
 tokio = { version = "1", features = ["sync"] }
 
+# profile passwords in the OS keychain (secrets.rs), each OS its native store
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+
 [profile.release]
 codegen-units = 1
 lto = true
